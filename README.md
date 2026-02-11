@@ -107,6 +107,27 @@ wayvoice cancel  # cancel current operation
 wayvoice status  # idle / recording / transcribing
 ```
 
+### xremap keybind (toggle style)
+
+If you use xremap, bind a key to launch `wayvoice toggle` on key press.
+
+```yaml
+modmap:
+  - name: Wayvoice
+    remap:
+      Shift_R:
+        skip_key_event: true
+        press:
+          - launch: [wayvoice, toggle]
+```
+
+Notes:
+- `skip_key_event = true` prevents the original key from being sent.
+- This is **toggle style** (press once to start, press again to stop).
+- Make sure `wayvoice serve` is running (for example as a user service).
+
+If you prefer **hold-to-record**, trigger `wayvoice toggle` on both `press` and `release`.
+
 ### One-shot mode (no daemon)
 
 ```bash
