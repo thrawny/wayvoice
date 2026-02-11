@@ -85,8 +85,8 @@ fn default_replacements() -> HashMap<String, String> {
         ("tail net", "tailnet"),
         ("urinal", "journal"),
         ("pmpm", "pnpm"),
-        ("throni", "thrawny"),
         ("LTAB", "Alt Tab"),
+        (".file", "dotfile"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -435,7 +435,12 @@ async fn inject_via_clipboard(text: &str) {
 
 async fn notify(message: &str) {
     let _ = Command::new("notify-send")
-        .args(["--app-name=wayvoice", "--expire-time=2000", "wayvoice", message])
+        .args([
+            "--app-name=wayvoice",
+            "--expire-time=2000",
+            "wayvoice",
+            message,
+        ])
         .status()
         .await;
 }
