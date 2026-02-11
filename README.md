@@ -31,18 +31,25 @@ cargo install --path . --locked
 
 This installs the `wayvoice` binary to `~/.cargo/bin/wayvoice`.
 
-### 2) Make sure runtime tools are installed
-
-On Arch-based systems:
+### 2) Make sure runtime tools are installed (Arch)
 
 ```bash
 sudo pacman -S pipewire wtype wl-clipboard libnotify
 ```
 
-On Debian/Ubuntu-based systems (package names may vary):
+### 3) Runtime tools on Nix / NixOS
+
+On NixOS, add these packages to your system or Home Manager config:
+
+- `pipewire`
+- `wtype`
+- `wl-clipboard`
+- `libnotify`
+
+On non-NixOS with the Nix package manager:
 
 ```bash
-sudo apt install pipewire-bin wtype wl-clipboard libnotify-bin
+nix profile install nixpkgs#pipewire nixpkgs#wtype nixpkgs#wl-clipboard nixpkgs#libnotify
 ```
 
 ---
@@ -73,7 +80,13 @@ language = "en"
 "hyperland" = "Hyprland"
 ```
 
-Replacements are **additive**: your `[replacements]` are merged on top of built-in defaults.
+Replacements are **additive by default**: your `[replacements]` are merged on top of built-in defaults.
+
+If you want to use only your own replacements, set:
+
+```toml
+use_default_replacements = false
+```
 
 ---
 

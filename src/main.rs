@@ -36,6 +36,8 @@ struct Config {
     language: String,
     #[serde(default)]
     model: String,
+    #[serde(default = "default_true")]
+    use_default_replacements: bool,
     #[serde(default)]
     replacements: HashMap<String, String>,
 }
@@ -44,6 +46,10 @@ fn config_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("~/.config"))
         .join("wayvoice.toml")
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_prompt() -> String {
@@ -120,10 +126,12 @@ fn load_config() -> Config {
         config.prompt = default_prompt();
     }
 
-    // Merge user replacements on top of defaults
-    let mut replacements = default_replacements();
-    replacements.extend(config.replacements);
-    config.replacements = replacements;
+    // Merge user replacements on top of defaults unless disabled
+    if config.use_default_replacements {
+        let mut replacements = default_replacements();
+        replacements.extend(std::mem::take(&mut config.replacements));
+        config.replacements = replacements;
+    }
 
     debug!("provider={:?}", config.provider);
     config
