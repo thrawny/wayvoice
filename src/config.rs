@@ -82,6 +82,9 @@ fn default_replacements() -> HashMap<String, String> {
         ("pmpm", "pnpm"),
         ("LTAB", "Alt Tab"),
         (".file", "dotfile"),
+        ("wavevoice", "wayvoice"),
+        ("nanocloud", "nanoclaw"),
+        ("justt", "just"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
