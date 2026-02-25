@@ -1,4 +1,6 @@
+use crate::audio_guard::{analyze_audio, reject_before_transcribe, reject_transcript};
 use crate::config::load_config;
+use crate::debug_recordings::save_recording_for_debug;
 use crate::text::apply_replacements;
 use crate::transcription::transcribe_audio;
 use log::debug;
@@ -42,6 +44,7 @@ pub async fn run_once() {
     // Stop recording
     let _ = child.kill().await;
     let _ = child.wait().await;
+    save_recording_for_debug(&audio_file).await;
 
     // Check if we got any audio
     let audio_data = match tokio::fs::metadata(&audio_file).await {
@@ -65,6 +68,22 @@ pub async fn run_once() {
         }
     };
 
+    let metrics = analyze_audio(&audio_data);
+    debug!(
+        "audio signal: payload_bytes={} samples={} mean_abs={:.2} max_abs={} too_short={} likely_silent={}",
+        metrics.payload_bytes,
+        metrics.sample_count,
+        metrics.mean_abs,
+        metrics.max_abs,
+        metrics.too_short,
+        metrics.likely_silent
+    );
+
+    if let Some(reason) = reject_before_transcribe(config.provider, metrics) {
+        eprintln!("{reason}");
+        std::process::exit(1);
+    }
+
     eprintln!("Transcribing...");
 
     // Transcribe
@@ -76,8 +95,13 @@ pub async fn run_once() {
         }
     };
 
-    // Apply replacements and print
     debug!("raw: {text}");
+    if let Some(reason) = reject_transcript(config.provider, &text, metrics) {
+        eprintln!("{reason}");
+        std::process::exit(1);
+    }
+
+    // Apply replacements and print
     let text = apply_replacements(&text, &config.replacements);
     debug!("replaced: {text}");
     println!("{text}");

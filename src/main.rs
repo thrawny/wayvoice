@@ -1,5 +1,7 @@
+mod audio_guard;
 mod config;
 mod daemon;
+mod debug_recordings;
 mod inject;
 mod ipc;
 mod oneshot;

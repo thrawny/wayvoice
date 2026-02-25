@@ -1,8 +1,10 @@
+use crate::audio_guard::{analyze_audio, reject_before_transcribe, reject_transcript};
 use crate::config::{Config, load_config};
+use crate::debug_recordings::save_recording_for_debug;
 use crate::inject::{inject_text, notify};
 use crate::text::apply_replacements;
 use crate::transcription::transcribe_audio;
-use log::debug;
+use log::{debug, warn};
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::{Child, Command};
@@ -108,6 +110,7 @@ impl Daemon {
             let _ = child.kill().await;
             let _ = child.wait().await;
         }
+        save_recording_for_debug(&self.audio_file).await;
         debug!("stop_recording: {:?}", stop_start.elapsed());
 
         // Check if we got any audio
@@ -129,9 +132,6 @@ impl Daemon {
             }
         }
 
-        self.state = State::Transcribing;
-        notify("Transcribing...").await;
-
         let read_start = std::time::Instant::now();
         let audio_data = match tokio::fs::read(&self.audio_file).await {
             Ok(data) => data,
@@ -144,15 +144,42 @@ impl Daemon {
         };
         debug!("file_read: {:?}", read_start.elapsed());
 
+        let metrics = analyze_audio(&audio_data);
+        debug!(
+            "audio signal: payload_bytes={} samples={} mean_abs={:.2} max_abs={} too_short={} likely_silent={}",
+            metrics.payload_bytes,
+            metrics.sample_count,
+            metrics.mean_abs,
+            metrics.max_abs,
+            metrics.too_short,
+            metrics.likely_silent
+        );
+
+        if let Some(reason) = reject_before_transcribe(self.config.provider, metrics) {
+            warn!("{reason}");
+            notify(reason).await;
+            self.state = State::Idle;
+            return;
+        }
+
+        self.state = State::Transcribing;
+        notify("Transcribing...").await;
+
         match transcribe_audio(audio_data, &self.config).await {
             Ok(text) => {
                 debug!("raw: {text}");
-                let text = apply_replacements(&text, &self.config.replacements);
-                debug!("replaced: {text}");
-                if !text.is_empty() {
-                    let inject_start = std::time::Instant::now();
-                    inject_text(&text).await;
-                    debug!("inject: {:?}", inject_start.elapsed());
+
+                if let Some(reason) = reject_transcript(self.config.provider, &text, metrics) {
+                    warn!("Discarded suspicious transcript: {text:?} ({reason})");
+                    notify(reason).await;
+                } else {
+                    let text = apply_replacements(&text, &self.config.replacements);
+                    debug!("replaced: {text}");
+                    if !text.is_empty() {
+                        let inject_start = std::time::Instant::now();
+                        inject_text(&text).await;
+                        debug!("inject: {:?}", inject_start.elapsed());
+                    }
                 }
             }
             Err(e) => {
