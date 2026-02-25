@@ -31,7 +31,7 @@ mod imp {
     use gtk::cairo::Context;
     use gtk::glib::{self, ControlFlow};
     use gtk::prelude::*;
-    use gtk::{Application, ApplicationWindow, DrawingArea, Label, Orientation};
+    use gtk::{Application, ApplicationWindow, DrawingArea, Orientation};
     use gtk4 as gtk;
     use gtk4_layer_shell as layer_shell;
     use layer_shell::LayerShell;
@@ -45,6 +45,8 @@ mod imp {
 
     const HUD_APP_ID_DAEMON: &str = "com.thrawny.wayvoice.hud";
     const HUD_APP_ID_PREVIEW: &str = "com.thrawny.wayvoice.hud.preview";
+    const HUD_WIDTH: i32 = 260;
+    const HUD_HEIGHT: i32 = 72;
     const STATUS_POLL_MS: u64 = 180;
     const WAVE_FRAME_MS: u64 = 33;
 
@@ -67,14 +69,6 @@ mod imp {
                 "recording" => Self::Recording,
                 "transcribing" => Self::Transcribing,
                 _ => Self::Hidden,
-            }
-        }
-
-        fn label(self) -> &'static str {
-            match self {
-                HudState::Recording => "● Recording",
-                HudState::Transcribing => "… Transcribing",
-                HudState::Hidden => "",
             }
         }
     }
@@ -110,8 +104,8 @@ mod imp {
         let window = ApplicationWindow::builder()
             .application(app)
             .title("wayvoice")
-            .default_width(260)
-            .default_height(96)
+            .default_width(HUD_WIDTH)
+            .default_height(HUD_HEIGHT)
             .resizable(false)
             .decorated(false)
             .build();
@@ -122,27 +116,21 @@ mod imp {
         apply_transparent_style(&window);
         configure_layer_shell(&window);
 
-        let root = gtk::Box::new(Orientation::Vertical, 8);
+        let root = gtk::Box::new(Orientation::Vertical, 0);
         root.set_focusable(false);
         root.set_focus_on_click(false);
         root.set_margin_start(12);
         root.set_margin_end(12);
-        root.set_margin_top(10);
-        root.set_margin_bottom(10);
-
-        let label = Label::new(Some("● Recording"));
-        label.set_xalign(0.0);
-        label.set_focusable(false);
-        label.set_focus_on_click(false);
+        root.set_margin_top(8);
+        root.set_margin_bottom(8);
 
         let wave = DrawingArea::builder()
             .content_width(236)
-            .content_height(46)
+            .content_height(48)
             .build();
         wave.set_focusable(false);
         wave.set_focus_on_click(false);
 
-        root.append(&label);
         root.append(&wave);
         window.set_child(Some(&root));
 
@@ -173,7 +161,6 @@ mod imp {
         match mode {
             HudMode::Daemon => {
                 let poll_window = window.clone();
-                let label = label.clone();
                 let hud_state = hud_state.clone();
                 glib::timeout_add_local(Duration::from_millis(STATUS_POLL_MS), move || {
                     let state = query_daemon_status()
@@ -187,7 +174,6 @@ mod imp {
                     match state {
                         HudState::Hidden => poll_window.hide(),
                         _ => {
-                            label.set_text(state.label());
                             if !poll_window.is_visible() {
                                 poll_window.show();
                             }
@@ -200,7 +186,6 @@ mod imp {
                 window.hide();
             }
             HudMode::Preview => {
-                label.set_text(HudState::Recording.label());
                 window.show();
             }
         }
@@ -215,10 +200,15 @@ mod imp {
         window.set_namespace(Some("wayvoice"));
         window.set_layer(layer_shell::Layer::Overlay);
         window.set_keyboard_mode(layer_shell::KeyboardMode::None);
-        window.set_anchor(layer_shell::Edge::Top, true);
-        window.set_anchor(layer_shell::Edge::Right, true);
-        window.set_margin(layer_shell::Edge::Top, 24);
-        window.set_margin(layer_shell::Edge::Right, 24);
+
+        // Place near bottom and let compositor choose active output.
+        // We intentionally do not force a monitor; compositor focus/output policy
+        // generally places this on the currently active monitor.
+        window.set_anchor(layer_shell::Edge::Bottom, true);
+        window.set_anchor(layer_shell::Edge::Left, false);
+        window.set_anchor(layer_shell::Edge::Top, false);
+        window.set_anchor(layer_shell::Edge::Right, false);
+        window.set_margin(layer_shell::Edge::Bottom, 48);
     }
 
     fn apply_transparent_style(window: &ApplicationWindow) {

@@ -8,17 +8,17 @@ default:
 build:
     cargo build --release
 
-# Run the daemon
+# Run the daemon (with HUD support)
 run:
-    cargo run -- serve
+    cargo run --features hud-ui -- serve
 
-# Watch daemon in a zmx session (rebuild on changes)
+# Watch daemon in a zmx session (rebuild on changes, with HUD support)
 watch provider="groq" session="wayvoice":
-    zmx attach {{ session }} sh -lc 'RUST_LOG=debug VOICE_PROVIDER={{ provider }} watchexec -w src -e rs --restart -- cargo run -- serve'
+    zmx attach {{ session }} sh -lc 'RUST_LOG=debug VOICE_PROVIDER={{ provider }} watchexec -w src -e rs --restart -- cargo run --features hud-ui -- serve'
 
-# Watch daemon without zmx (rebuild on changes)
+# Watch daemon without zmx (rebuild on changes, with HUD support)
 watch-raw provider="groq":
-    RUST_LOG=debug VOICE_PROVIDER={{ provider }} watchexec -w src -e rs --restart -- cargo run -- serve
+    RUST_LOG=debug VOICE_PROVIDER={{ provider }} watchexec -w src -e rs --restart -- cargo run --features hud-ui -- serve
 
 # Show HUD preview without recording (for UI iteration)
 hud-preview:
@@ -31,6 +31,11 @@ install:
 # Run clippy
 clippy:
     cargo clippy --fix --allow-dirty --allow-staged --release
+
+# Run all post-change checks
+check:
+    just fmt
+    just test
 
 # Run tests
 test:

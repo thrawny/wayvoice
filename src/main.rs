@@ -102,7 +102,7 @@ async fn main() {
 
 fn spawn_hud_if_enabled() {
     if !hud::is_supported() {
-        debug!("HUD disabled: binary built without hud-ui feature");
+        warn!("HUD disabled: binary built without hud-ui feature");
         return;
     }
 

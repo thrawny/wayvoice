@@ -66,6 +66,13 @@ async fn inject_via_clipboard(text: &str) {
 }
 
 pub async fn notify(message: &str) {
+    // HUD is the primary runtime status surface now. Keep desktop notifications
+    // opt-in to avoid duplicate popups and focus churn.
+    if !notify_send_enabled() {
+        debug!("notify(hud-only): {message}");
+        return;
+    }
+
     let _ = Command::new("notify-send")
         .args([
             "--app-name=wayvoice",
@@ -75,6 +82,16 @@ pub async fn notify(message: &str) {
         ])
         .status()
         .await;
+}
+
+fn notify_send_enabled() -> bool {
+    match std::env::var("VOICE_NOTIFY_SEND") {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => false,
+    }
 }
 
 fn wtype_delay_ms(mode: &str) -> u64 {
