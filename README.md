@@ -21,7 +21,27 @@ Voice-to-text for Wayland.
 
 ## Install
 
-### 1) Build and install with Cargo
+### 1) Install with Nix flakes
+
+From this repo:
+
+```bash
+nix profile install .#wayvoice
+```
+
+From GitHub (replace `OWNER/REPO`):
+
+```bash
+nix profile install github:OWNER/REPO#wayvoice
+```
+
+HUD-enabled variant:
+
+```bash
+nix profile install github:OWNER/REPO#wayvoice-hud
+```
+
+### 2) Build and install with Cargo
 
 Without HUD (minimal dependencies):
 
@@ -37,7 +57,7 @@ cargo install --path . --locked --features hud-ui
 
 The HUD feature requires GTK4 and gtk4-layer-shell development libraries.
 
-### 2) HUD dependencies
+### 3) HUD dependencies
 
 The `hud-ui` feature links against GTK4 and gtk4-layer-shell. Install the dev packages before building:
 
@@ -51,13 +71,17 @@ sudo pacman -S gtk4 gtk4-layer-shell
 
 If you use the project's `flake.nix` dev shell, these are already included.
 
-### 3) Runtime tools (Arch)
+### 4) Runtime tools (Arch)
 
 ```bash
 sudo pacman -S pipewire wtype wl-clipboard libnotify
 ```
 
-### 4) Runtime tools on Nix / NixOS
+### 5) Runtime tools on Nix / NixOS
+
+If you installed `wayvoice` from this flake, these tools are already on PATH via wrapper.
+
+If you built with Cargo instead, add these packages manually.
 
 On NixOS, add these packages to your system or Home Manager config:
 
