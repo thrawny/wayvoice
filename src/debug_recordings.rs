@@ -1,11 +1,12 @@
+use crate::config::Config;
 use log::{debug, warn};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const KEEP_LAST_RECORDINGS: usize = 10;
 
-pub async fn save_recording_for_debug(audio_file: &Path) {
-    if !debug_recordings_enabled() {
+pub async fn save_recording_for_debug(audio_file: &Path, config: &Config) {
+    if !config.debug_recordings {
         return;
     }
 
@@ -17,7 +18,7 @@ pub async fn save_recording_for_debug(audio_file: &Path) {
         return;
     }
 
-    let dir = debug_recordings_dir();
+    let dir = recordings_dir(config);
     if let Err(e) = tokio::fs::create_dir_all(&dir).await {
         warn!("Failed to create debug recordings dir {dir:?}: {e}");
         return;
@@ -38,18 +39,8 @@ pub async fn save_recording_for_debug(audio_file: &Path) {
     }
 }
 
-fn debug_recordings_enabled() -> bool {
-    match std::env::var("VOICE_DEBUG_RECORDINGS") {
-        Ok(value) => !matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "0" | "false" | "no" | "off"
-        ),
-        Err(_) => true,
-    }
-}
-
-fn debug_recordings_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("VOICE_DEBUG_RECORDINGS_DIR") {
+fn recordings_dir(config: &Config) -> PathBuf {
+    if let Some(dir) = &config.debug_recordings_dir {
         return PathBuf::from(dir);
     }
 

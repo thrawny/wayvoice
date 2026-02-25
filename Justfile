@@ -28,13 +28,14 @@ hud-preview:
 install:
     cargo install --path . --locked --force
 
-# Run clippy
+# Run clippy (auto-fix)
 clippy:
     cargo clippy --fix --allow-dirty --allow-staged --release
 
 # Run all post-change checks
 check:
     just fmt
+    cargo clippy --features hud-ui -- -D warnings
     just test
 
 # Run tests

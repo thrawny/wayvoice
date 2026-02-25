@@ -13,15 +13,15 @@
         "aarch64-linux"
       ];
       forEachSystem = nixpkgs.lib.genAttrs systems;
-      cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
-      version = cargoToml.package.version;
+      cargoToml = nixpkgs.lib.importTOML ./Cargo.toml;
+      inherit (cargoToml.package) version;
     in
     {
       packages = forEachSystem (
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          lib = pkgs.lib;
+          inherit (pkgs) lib;
 
           mkWayvoice =
             { hud ? false }:
@@ -60,8 +60,7 @@
                 platforms = lib.platforms.linux;
               };
             };
-        in
-        let
+
           wayvoice = mkWayvoice { };
           wayvoice-hud = mkWayvoice { hud = true; };
         in

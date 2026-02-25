@@ -11,7 +11,7 @@ hud-ui = ["dep:gtk4", "dep:gtk4-layer-shell"]
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+config = { version = "0.15", features = ["toml"] }
 dirs = "6"
 reqwest = { version = "0.12", features = ["multipart", "rustls-tls", "json"], default-features = false }
 tokio = { version = "1", features = ["rt", "process", "io-util", "fs", "sync", "net", "signal", "macros"] }

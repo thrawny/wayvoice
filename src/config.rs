@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Deserialize, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     Openai,
@@ -11,37 +11,54 @@ pub enum Provider {
     Groq,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Clone)]
+#[serde(default)]
 pub struct Config {
-    #[serde(default)]
     pub provider: Provider,
-    #[serde(default)]
     pub openai_api_key: String,
-    #[serde(default)]
     pub groq_api_key: String,
-    #[serde(default)]
     pub prompt: String,
-    #[serde(default)]
     pub language: String,
-    #[serde(default)]
     pub model: String,
-    #[serde(default = "default_true")]
     pub use_default_replacements: bool,
-    #[serde(default)]
     pub replacements: HashMap<String, String>,
-    #[serde(default)]
-    #[cfg_attr(not(feature = "hud-ui"), allow(dead_code))]
     pub hud_color: Option<String>,
+    pub hud: bool,
+    pub inject_mode: String,
+    pub wtype_delay_ms: Option<u64>,
+    pub wtype_key_delay_ms: u64,
+    pub notify_send: bool,
+    pub debug_recordings: bool,
+    pub debug_recordings_dir: Option<String>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            provider: Provider::default(),
+            openai_api_key: String::new(),
+            groq_api_key: String::new(),
+            prompt: String::new(),
+            language: String::new(),
+            model: String::new(),
+            use_default_replacements: true,
+            replacements: HashMap::new(),
+            hud_color: None,
+            hud: true,
+            inject_mode: "clipboard".to_string(),
+            wtype_delay_ms: None,
+            wtype_key_delay_ms: 5,
+            notify_send: false,
+            debug_recordings: true,
+            debug_recordings_dir: None,
+        }
+    }
 }
 
 fn config_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("~/.config"))
         .join("wayvoice.toml")
-}
-
-fn default_true() -> bool {
-    true
 }
 
 fn default_prompt() -> String {
@@ -56,21 +73,16 @@ fn default_prompt() -> String {
 }
 
 fn default_replacements() -> HashMap<String, String> {
-    // Keep this list conservative to avoid accidental rewrites.
     [
-        // Wayland compositors
         ("hyperland", "Hyprland"),
         ("hyper land", "Hyprland"),
         ("neary", "Niri"),
-        // Editors
         ("neovim", "Neovim"),
         ("neo vim", "Neovim"),
         ("lazy vim", "LazyVim"),
         ("lazyvim", "LazyVim"),
-        // Nix
         ("nix os", "NixOS"),
         ("home manager", "Home Manager"),
-        // Claude + tooling
         ("cloude code", "Claude Code"),
         ("cloud code", "Claude Code"),
         ("cloudmd", "CLAUDE.md"),
@@ -81,7 +93,6 @@ fn default_replacements() -> HashMap<String, String> {
         ("ghosty", "Ghostty"),
         ("tail net", "tailnet"),
         ("pmpm", "pnpm"),
-        // Project-specific
         ("wavevoice", "wayvoice"),
         ("jus", "just"),
         ("whisper flow", "Wisprflow"),
@@ -96,33 +107,20 @@ fn default_replacements() -> HashMap<String, String> {
 }
 
 pub fn load_config() -> Config {
-    let path = config_path();
-    let mut config = if let Ok(content) = std::fs::read_to_string(&path) {
-        match toml::from_str(&content) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Failed to parse {path:?}: {e}");
-                Config::default()
-            }
-        }
-    } else {
-        Config::default()
-    };
-
-    // Allow env var to override provider
-    if let Ok(provider) = std::env::var("VOICE_PROVIDER") {
-        config.provider = match provider.to_lowercase().as_str() {
-            "groq" => Provider::Groq,
-            "openai" => Provider::Openai,
-            _ => config.provider,
-        };
-    }
+    let mut config: Config = config::Config::builder()
+        .add_source(config::File::from(config_path()).required(false))
+        .add_source(config::Environment::with_prefix("VOICE"))
+        .build()
+        .and_then(|c| c.try_deserialize())
+        .unwrap_or_else(|e| {
+            eprintln!("Config error: {e}");
+            Config::default()
+        });
 
     if config.prompt.is_empty() {
         config.prompt = default_prompt();
     }
 
-    // Merge user replacements on top of defaults unless disabled
     if config.use_default_replacements {
         let mut replacements = default_replacements();
         replacements.extend(std::mem::take(&mut config.replacements));

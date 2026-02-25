@@ -12,9 +12,7 @@ wayvoice is a Wayland voice-to-text daemon that records audio, transcribes with 
 
 ## 2) After code changes
 
-- Run validation before finishing:
-  - `just fmt`
-  - `just test`
+- Run `just check` after every code change (runs fmt, clippy, test).
 - If changes affect dev-shell dependencies (`flake.nix` / system libs), tell the human to restart/reload their session so `direnv` picks up the new flake environment.
 
 ## 3) Runtime / debugging workflow

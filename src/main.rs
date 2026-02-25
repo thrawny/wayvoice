@@ -10,6 +10,7 @@ mod text;
 mod transcription;
 
 use clap::{Parser, Subcommand};
+use config::load_config;
 use daemon::Daemon;
 use ipc::{run_server, send_command};
 use log::{debug, warn};
@@ -50,9 +51,13 @@ async fn main() {
 
     match cli.command {
         Commands::Serve => {
-            spawn_hud_if_enabled();
+            let config = load_config();
 
-            let daemon = Arc::new(Mutex::new(Daemon::new()));
+            if config.hud {
+                spawn_hud();
+            }
+
+            let daemon = Arc::new(Mutex::new(Daemon::new(config)));
 
             let daemon_for_signal = daemon.clone();
             tokio::spawn(async move {
@@ -89,7 +94,8 @@ async fn main() {
             }
         },
         Commands::Once => {
-            run_once().await;
+            let config = load_config();
+            run_once(config).await;
         }
         Commands::Hud => {
             hud::run_hud();
@@ -100,13 +106,9 @@ async fn main() {
     }
 }
 
-fn spawn_hud_if_enabled() {
+fn spawn_hud() {
     if !hud::is_supported() {
         warn!("HUD disabled: binary built without hud-ui feature");
-        return;
-    }
-
-    if !hud_enabled() {
         return;
     }
 
@@ -127,15 +129,5 @@ fn spawn_hud_if_enabled() {
     {
         Ok(_) => debug!("HUD process spawned"),
         Err(e) => warn!("Failed to spawn HUD process: {e}"),
-    }
-}
-
-fn hud_enabled() -> bool {
-    match std::env::var("VOICE_HUD") {
-        Ok(value) => !matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "0" | "false" | "no" | "off"
-        ),
-        Err(_) => true,
     }
 }

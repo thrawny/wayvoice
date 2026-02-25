@@ -1,7 +1,7 @@
 use crate::audio_guard::{
     AudioMetrics, analyze_audio, reject_before_transcribe, reject_transcript,
 };
-use crate::config::{Config, load_config};
+use crate::config::Config;
 use crate::debug_recordings::save_recording_for_debug;
 use crate::inject::{inject_text, notify};
 use crate::text::apply_replacements;
@@ -36,7 +36,7 @@ pub struct TranscriptionJob {
 
 pub enum ToggleResult {
     Started,
-    Transcribing(TranscriptionJob),
+    Transcribing(Box<TranscriptionJob>),
     Busy,
 }
 
@@ -48,11 +48,11 @@ pub struct Daemon {
 }
 
 impl Daemon {
-    pub fn new() -> Self {
+    pub fn new(config: Config) -> Self {
         let audio_file = std::env::temp_dir().join("voice-recording.wav");
         Self {
             state: State::Idle,
-            config: load_config(),
+            config,
             recorder: None,
             audio_file,
         }
@@ -69,8 +69,8 @@ impl Daemon {
                 ToggleResult::Started
             }
             State::Recording => match self.prepare_transcription().await {
-                Some(job) => ToggleResult::Transcribing(job),
-                None => ToggleResult::Started, // fell back to idle
+                Some(job) => ToggleResult::Transcribing(Box::new(job)),
+                None => ToggleResult::Started,
             },
             State::Transcribing => ToggleResult::Busy,
         }
@@ -81,7 +81,7 @@ impl Daemon {
             let _ = child.kill().await;
         }
         self.state = State::Idle;
-        notify("Cancelled").await;
+        notify("Cancelled", &self.config).await;
         "cancelled"
     }
 
@@ -96,20 +96,20 @@ impl Daemon {
 
                 if let Some(reason) = reject_transcript(job.config.provider, &text, job.metrics) {
                     warn!("Discarded suspicious transcript: {text:?} ({reason})");
-                    notify(reason).await;
+                    notify(reason, &job.config).await;
                 } else {
                     let text = apply_replacements(&text, &job.config.replacements);
                     debug!("replaced: {text}");
                     if !text.is_empty() {
                         let inject_start = std::time::Instant::now();
-                        inject_text(&text).await;
+                        inject_text(&text, &job.config).await;
                         debug!("inject: {:?}", inject_start.elapsed());
                     }
                 }
             }
             Err(e) => {
                 eprintln!("Transcription failed: {e}");
-                notify(&format!("Error: {e}")).await;
+                notify(&format!("Error: {e}"), &job.config).await;
             }
         }
 
@@ -139,11 +139,11 @@ impl Daemon {
             Ok(child) => {
                 self.recorder = Some(child);
                 self.state = State::Recording;
-                notify("Recording...").await;
+                notify("Recording...", &self.config).await;
             }
             Err(e) => {
                 eprintln!("Failed to start pw-record: {e}");
-                notify("Failed to start recording").await;
+                notify("Failed to start recording", &self.config).await;
             }
         }
     }
@@ -159,19 +159,19 @@ impl Daemon {
             let _ = child.kill().await;
             let _ = child.wait().await;
         }
-        save_recording_for_debug(&self.audio_file).await;
+        save_recording_for_debug(&self.audio_file, &self.config).await;
         debug!("stop_recording: {:?}", stop_start.elapsed());
 
         match tokio::fs::metadata(&self.audio_file).await {
             Ok(meta) if meta.len() < 1000 => {
                 eprintln!("No audio recorded");
-                notify("No audio recorded").await;
+                notify("No audio recorded", &self.config).await;
                 self.state = State::Idle;
                 return None;
             }
             Err(_) => {
                 eprintln!("No audio file");
-                notify("Recording failed").await;
+                notify("Recording failed", &self.config).await;
                 self.state = State::Idle;
                 return None;
             }
@@ -185,7 +185,7 @@ impl Daemon {
             Ok(data) => data,
             Err(e) => {
                 eprintln!("Failed to read audio file: {e}");
-                notify(&format!("Error: {e}")).await;
+                notify(&format!("Error: {e}"), &self.config).await;
                 self.state = State::Idle;
                 return None;
             }
@@ -205,13 +205,13 @@ impl Daemon {
 
         if let Some(reason) = reject_before_transcribe(self.config.provider, metrics) {
             warn!("{reason}");
-            notify(reason).await;
+            notify(reason, &self.config).await;
             self.state = State::Idle;
             return None;
         }
 
         self.state = State::Transcribing;
-        notify("Transcribing...").await;
+        notify("Transcribing...", &self.config).await;
 
         Some(TranscriptionJob {
             audio_data,
