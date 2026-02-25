@@ -20,6 +20,10 @@ watch provider="groq" session="wayvoice":
 watch-raw provider="groq":
     RUST_LOG=debug VOICE_PROVIDER={{ provider }} watchexec -w src -e rs --restart -- cargo run -- serve
 
+# Show HUD preview without recording (for UI iteration)
+hud-preview:
+    cargo run --features hud-ui -- hud-preview
+
 # Install to ~/.cargo/bin
 install:
     cargo install --path . --locked --force

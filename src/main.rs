@@ -2,6 +2,7 @@ mod audio_guard;
 mod config;
 mod daemon;
 mod debug_recordings;
+mod hud;
 mod inject;
 mod ipc;
 mod oneshot;
@@ -11,7 +12,9 @@ mod transcription;
 use clap::{Parser, Subcommand};
 use daemon::Daemon;
 use ipc::{run_server, send_command};
+use log::{debug, warn};
 use oneshot::run_once;
+use std::process::Stdio;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -34,6 +37,10 @@ enum Commands {
     Status,
     /// One-shot: record until Enter, transcribe, print to stdout
     Once,
+    /// HUD popup for recording/transcribing state
+    Hud,
+    /// Show HUD in preview mode without daemon state
+    HudPreview,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -43,6 +50,8 @@ async fn main() {
 
     match cli.command {
         Commands::Serve => {
+            spawn_hud_if_enabled();
+
             let daemon = Arc::new(Mutex::new(Daemon::new()));
 
             let daemon_for_signal = daemon.clone();
@@ -82,5 +91,51 @@ async fn main() {
         Commands::Once => {
             run_once().await;
         }
+        Commands::Hud => {
+            hud::run_hud();
+        }
+        Commands::HudPreview => {
+            hud::run_hud_preview();
+        }
+    }
+}
+
+fn spawn_hud_if_enabled() {
+    if !hud::is_supported() {
+        debug!("HUD disabled: binary built without hud-ui feature");
+        return;
+    }
+
+    if !hud_enabled() {
+        return;
+    }
+
+    let exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(e) => {
+            warn!("Failed to resolve current executable for HUD spawn: {e}");
+            return;
+        }
+    };
+
+    match std::process::Command::new(exe)
+        .arg("hud")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(_) => debug!("HUD process spawned"),
+        Err(e) => warn!("Failed to spawn HUD process: {e}"),
+    }
+}
+
+fn hud_enabled() -> bool {
+    match std::env::var("VOICE_HUD") {
+        Ok(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        Err(_) => true,
     }
 }

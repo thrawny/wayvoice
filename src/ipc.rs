@@ -5,7 +5,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Mutex;
 
-fn socket_path() -> PathBuf {
+pub fn socket_path() -> PathBuf {
     std::env::var("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/tmp"))

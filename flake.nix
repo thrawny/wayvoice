@@ -23,6 +23,8 @@
           default = pkgs.mkShell {
             packages = with pkgs; [
               pkg-config
+              gtk4
+              gtk4-layer-shell
             ];
           };
         }
