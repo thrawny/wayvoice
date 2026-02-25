@@ -152,7 +152,7 @@ mod imp {
             let wave = wave.clone();
             let phase = phase.clone();
             glib::timeout_add_local(Duration::from_millis(WAVE_FRAME_MS), move || {
-                phase.set((phase.get() + 0.17) % (std::f64::consts::TAU));
+                phase.set((phase.get() + 0.09) % (std::f64::consts::TAU));
                 wave.queue_draw();
                 ControlFlow::Continue
             });
@@ -235,45 +235,69 @@ mod imp {
     }
 
     fn draw_wave(cr: &Context, width: i32, height: i32, phase: f64, state: HudState) {
-        let width = width.max(1) as f64;
-        let height = height.max(1) as f64;
+        let w = width.max(1) as f64;
+        let h = height.max(1) as f64;
 
-        cr.set_source_rgba(0.07, 0.08, 0.10, 0.28);
-        cr.rectangle(0.0, 0.0, width, height);
+        // Pill backdrop
+        rounded_rect(cr, 0.0, 0.0, w, h, h * 0.44);
+        cr.set_source_rgba(0.05, 0.06, 0.08, 0.58);
         let _ = cr.fill();
 
         let (r, g, b) = match state {
-            HudState::Recording => (0.97, 0.33, 0.42),
-            HudState::Transcribing => (0.38, 0.65, 1.0),
+            HudState::Recording => (0.99, 0.38, 0.55),
+            HudState::Transcribing => (0.40, 0.62, 0.96),
             HudState::Hidden => (0.36, 0.40, 0.45),
         };
 
-        cr.set_source_rgba(r, g, b, 0.95);
+        // Pulsing recording dot
+        let bar_left = if state == HudState::Recording {
+            let pulse = 0.55 + (phase * 1.6).sin().abs() * 0.45;
+            cr.set_source_rgba(r, g, b, pulse);
+            cr.arc(18.0, h * 0.5, 3.2, 0.0, std::f64::consts::TAU);
+            let _ = cr.fill();
+            28.0
+        } else {
+            14.0
+        };
 
-        let bars = 18;
-        let bar_w = (width / bars as f64 * 0.62).max(2.0);
-        let step = width / bars as f64;
+        // Bar field
+        let bar_right = w - 14.0;
+        let field = bar_right - bar_left;
+        let bars: usize = 14;
+        let step = field / bars as f64;
+        let bar_w = (step * 0.42).max(2.5);
+        let bar_r = bar_w * 0.5;
+
+        cr.set_source_rgba(r, g, b, 0.90);
 
         for i in 0..bars {
-            let x = i as f64 * step + ((step - bar_w) * 0.5);
-            let center_bias = 1.0 - ((i as f64 / (bars - 1) as f64) - 0.5).abs() * 1.4;
-            let center_bias = center_bias.max(0.22);
+            let x = bar_left + i as f64 * step + (step - bar_w) * 0.5;
+            let center = (1.0 - ((i as f64 / (bars - 1) as f64) - 0.5).abs() * 1.5).max(0.18);
 
             let motion = match state {
-                HudState::Recording => (phase + i as f64 * 0.41).sin().abs(),
-                HudState::Transcribing => {
-                    0.35 + (phase * 0.55 + i as f64 * 0.16).sin().abs() * 0.25
-                }
-                HudState::Hidden => 0.10,
+                HudState::Recording => (phase + i as f64 * 0.44).sin().abs(),
+                HudState::Transcribing => 0.32 + (phase * 0.5 + i as f64 * 0.19).sin().abs() * 0.28,
+                HudState::Hidden => 0.08,
             };
 
-            let bar_h = (height * (0.12 + motion * 0.72 * center_bias)).max(3.0);
-            let y = (height - bar_h) * 0.5;
+            let bar_h = (h * 0.74 * (0.14 + motion * 0.86 * center)).max(bar_w);
+            let y = (h - bar_h) * 0.5;
 
-            cr.rectangle(x, y, bar_w, bar_h);
+            rounded_rect(cr, x, y, bar_w, bar_h, bar_r);
         }
 
         let _ = cr.fill();
+    }
+
+    fn rounded_rect(cr: &Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
+        use std::f64::consts::{FRAC_PI_2, PI};
+        let r = r.min(w * 0.5).min(h * 0.5);
+        cr.new_sub_path();
+        cr.arc(x + w - r, y + r, r, -FRAC_PI_2, 0.0);
+        cr.arc(x + w - r, y + h - r, r, 0.0, FRAC_PI_2);
+        cr.arc(x + r, y + h - r, r, FRAC_PI_2, PI);
+        cr.arc(x + r, y + r, r, PI, PI + FRAC_PI_2);
+        cr.close_path();
     }
 
     fn query_daemon_status() -> Option<String> {
