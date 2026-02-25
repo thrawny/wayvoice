@@ -15,6 +15,18 @@ just watch        # Watch + run daemon (default: groq)
 just watch openai # Watch + run daemon with OpenAI
 ```
 
+## Agent Handoff Workflow
+
+- After code changes are complete, assume the human wants `just watch` running in its zmx session.
+- If asked to verify runtime behavior, check logs via zmx instead of asking the user to paste terminal output.
+
+Useful commands:
+
+```bash
+zmx list --short
+zmx history wayvoice | tail -n 200
+```
+
 ## Architecture
 
 Single binary with subcommands:

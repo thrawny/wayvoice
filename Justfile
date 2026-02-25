@@ -12,8 +12,12 @@ build:
 run:
     cargo run -- serve
 
-# Watch daemon (rebuild on changes)
-watch provider="groq":
+# Watch daemon in a zmx session (rebuild on changes)
+watch provider="groq" session="wayvoice":
+    zmx attach {{ session }} sh -lc 'RUST_LOG=debug VOICE_PROVIDER={{ provider }} watchexec -w src -e rs --restart -- cargo run -- serve'
+
+# Watch daemon without zmx (rebuild on changes)
+watch-raw provider="groq":
     RUST_LOG=debug VOICE_PROVIDER={{ provider }} watchexec -w src -e rs --restart -- cargo run -- serve
 
 # Install to ~/.cargo/bin
