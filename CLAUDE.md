@@ -2,6 +2,8 @@
 
 This file is the behavioral source of truth for agents in this repo.
 
+wayvoice is a Wayland voice-to-text daemon that records audio, transcribes with Whisper APIs (Groq/OpenAI), and injects text into the active app.
+
 ## 1) How to execute tasks
 
 - Prefer `just` recipes over raw commands.
