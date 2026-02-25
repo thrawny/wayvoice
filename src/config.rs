@@ -85,6 +85,7 @@ fn default_replacements() -> HashMap<String, String> {
         ("wavevoice", "wayvoice"),
         ("jus", "just"),
         ("whisper flow", "wisprflow"),
+        (".files", "dotfiles"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
