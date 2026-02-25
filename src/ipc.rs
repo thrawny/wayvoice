@@ -1,4 +1,5 @@
-use crate::daemon::Daemon;
+use crate::daemon::{Daemon, ToggleResult};
+use crate::transcription::transcribe_audio;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -35,7 +36,22 @@ async fn handle_client(stream: UnixStream, daemon: Arc<Mutex<Daemon>>) {
         let response = match line.trim() {
             "toggle" => {
                 let mut d = daemon.lock().await;
-                d.toggle().await.to_string()
+                let result = d.toggle().await;
+                match result {
+                    ToggleResult::Started => "recording".to_string(),
+                    ToggleResult::Busy => "busy".to_string(),
+                    ToggleResult::Transcribing(job) => {
+                        drop(d);
+                        let daemon = daemon.clone();
+                        tokio::spawn(async move {
+                            let result =
+                                transcribe_audio(job.audio_data.clone(), &job.config).await;
+                            let mut d = daemon.lock().await;
+                            d.finish_transcription(result, &job).await;
+                        });
+                        "transcribing".to_string()
+                    }
+                }
             }
             "cancel" => {
                 let mut d = daemon.lock().await;

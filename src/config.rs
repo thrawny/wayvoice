@@ -11,7 +11,7 @@ pub enum Provider {
     Groq,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 pub struct Config {
     #[serde(default)]
     pub provider: Provider,
@@ -29,6 +29,9 @@ pub struct Config {
     pub use_default_replacements: bool,
     #[serde(default)]
     pub replacements: HashMap<String, String>,
+    #[serde(default)]
+    #[cfg_attr(not(feature = "hud-ui"), allow(dead_code))]
+    pub hud_color: Option<String>,
 }
 
 fn config_path() -> PathBuf {
@@ -124,4 +127,16 @@ pub fn load_config() -> Config {
 
     debug!("provider={:?}", config.provider);
     config
+}
+
+#[cfg(feature = "hud-ui")]
+pub fn parse_hex_color(hex: &str) -> Option<(f64, f64, f64)> {
+    let hex = hex.strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some((r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0))
 }

@@ -1,9 +1,10 @@
-use crate::audio_guard::{analyze_audio, reject_before_transcribe, reject_transcript};
+use crate::audio_guard::{
+    AudioMetrics, analyze_audio, reject_before_transcribe, reject_transcript,
+};
 use crate::config::{Config, load_config};
 use crate::debug_recordings::save_recording_for_debug;
 use crate::inject::{inject_text, notify};
 use crate::text::apply_replacements;
-use crate::transcription::transcribe_audio;
 use log::{debug, warn};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -24,6 +25,19 @@ impl State {
             State::Transcribing => "transcribing",
         }
     }
+}
+
+pub struct TranscriptionJob {
+    pub audio_data: Vec<u8>,
+    pub config: Config,
+    pub metrics: AudioMetrics,
+    pub total_start: std::time::Instant,
+}
+
+pub enum ToggleResult {
+    Started,
+    Transcribing(TranscriptionJob),
+    Busy,
 }
 
 pub struct Daemon {
@@ -48,17 +62,17 @@ impl Daemon {
         self.state.as_str()
     }
 
-    pub async fn toggle(&mut self) -> &'static str {
+    pub async fn toggle(&mut self) -> ToggleResult {
         match self.state {
             State::Idle => {
                 self.start_recording().await;
-                "recording"
+                ToggleResult::Started
             }
-            State::Recording => {
-                self.stop_and_transcribe().await;
-                "transcribing"
-            }
-            State::Transcribing => "busy",
+            State::Recording => match self.prepare_transcription().await {
+                Some(job) => ToggleResult::Transcribing(job),
+                None => ToggleResult::Started, // fell back to idle
+            },
+            State::Transcribing => ToggleResult::Busy,
         }
     }
 
@@ -69,6 +83,38 @@ impl Daemon {
         self.state = State::Idle;
         notify("Cancelled").await;
         "cancelled"
+    }
+
+    pub async fn finish_transcription(
+        &mut self,
+        result: Result<String, Box<dyn std::error::Error + Send + Sync>>,
+        job: &TranscriptionJob,
+    ) {
+        match result {
+            Ok(text) => {
+                debug!("raw: {text}");
+
+                if let Some(reason) = reject_transcript(job.config.provider, &text, job.metrics) {
+                    warn!("Discarded suspicious transcript: {text:?} ({reason})");
+                    notify(reason).await;
+                } else {
+                    let text = apply_replacements(&text, &job.config.replacements);
+                    debug!("replaced: {text}");
+                    if !text.is_empty() {
+                        let inject_start = std::time::Instant::now();
+                        inject_text(&text).await;
+                        debug!("inject: {:?}", inject_start.elapsed());
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Transcription failed: {e}");
+                notify(&format!("Error: {e}")).await;
+            }
+        }
+
+        debug!("total: {:?}", job.total_start.elapsed());
+        self.state = State::Idle;
     }
 
     async fn start_recording(&mut self) {
@@ -102,7 +148,10 @@ impl Daemon {
         }
     }
 
-    async fn stop_and_transcribe(&mut self) {
+    /// Stop recording, read & validate audio, set state to Transcribing.
+    /// Returns a job for the caller to run outside the lock, or None if
+    /// the audio was rejected early.
+    async fn prepare_transcription(&mut self) -> Option<TranscriptionJob> {
         let total_start = std::time::Instant::now();
 
         let stop_start = std::time::Instant::now();
@@ -113,19 +162,18 @@ impl Daemon {
         save_recording_for_debug(&self.audio_file).await;
         debug!("stop_recording: {:?}", stop_start.elapsed());
 
-        // Check if we got any audio
         match tokio::fs::metadata(&self.audio_file).await {
             Ok(meta) if meta.len() < 1000 => {
                 eprintln!("No audio recorded");
                 notify("No audio recorded").await;
                 self.state = State::Idle;
-                return;
+                return None;
             }
             Err(_) => {
                 eprintln!("No audio file");
                 notify("Recording failed").await;
                 self.state = State::Idle;
-                return;
+                return None;
             }
             Ok(meta) => {
                 debug!("audio bytes: {}", meta.len());
@@ -139,7 +187,7 @@ impl Daemon {
                 eprintln!("Failed to read audio file: {e}");
                 notify(&format!("Error: {e}")).await;
                 self.state = State::Idle;
-                return;
+                return None;
             }
         };
         debug!("file_read: {:?}", read_start.elapsed());
@@ -159,36 +207,17 @@ impl Daemon {
             warn!("{reason}");
             notify(reason).await;
             self.state = State::Idle;
-            return;
+            return None;
         }
 
         self.state = State::Transcribing;
         notify("Transcribing...").await;
 
-        match transcribe_audio(audio_data, &self.config).await {
-            Ok(text) => {
-                debug!("raw: {text}");
-
-                if let Some(reason) = reject_transcript(self.config.provider, &text, metrics) {
-                    warn!("Discarded suspicious transcript: {text:?} ({reason})");
-                    notify(reason).await;
-                } else {
-                    let text = apply_replacements(&text, &self.config.replacements);
-                    debug!("replaced: {text}");
-                    if !text.is_empty() {
-                        let inject_start = std::time::Instant::now();
-                        inject_text(&text).await;
-                        debug!("inject: {:?}", inject_start.elapsed());
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Transcription failed: {e}");
-                notify(&format!("Error: {e}")).await;
-            }
-        }
-
-        debug!("total: {:?}", total_start.elapsed());
-        self.state = State::Idle;
+        Some(TranscriptionJob {
+            audio_data,
+            config: self.config.clone(),
+            metrics,
+            total_start,
+        })
     }
 }

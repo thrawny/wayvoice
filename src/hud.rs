@@ -27,6 +27,7 @@ pub fn run_hud_preview() {
 
 #[cfg(feature = "hud-ui")]
 mod imp {
+    use crate::config::{load_config, parse_hex_color};
     use crate::ipc::socket_path;
     use gtk::cairo::Context;
     use gtk::glib::{self, ControlFlow};
@@ -134,6 +135,12 @@ mod imp {
         root.append(&wave);
         window.set_child(Some(&root));
 
+        let rec_color = load_config()
+            .hud_color
+            .as_deref()
+            .and_then(parse_hex_color)
+            .unwrap_or((0.99, 0.38, 0.55));
+
         let phase = Rc::new(Cell::new(0.0));
         let hud_state = Rc::new(RefCell::new(match mode {
             HudMode::Daemon => HudState::Hidden,
@@ -144,7 +151,14 @@ mod imp {
             let phase = phase.clone();
             let hud_state = hud_state.clone();
             wave.set_draw_func(move |_, cr, width, height| {
-                draw_wave(cr, width, height, phase.get(), *hud_state.borrow());
+                draw_wave(
+                    cr,
+                    width,
+                    height,
+                    phase.get(),
+                    *hud_state.borrow(),
+                    rec_color,
+                );
             });
         }
 
@@ -186,6 +200,15 @@ mod imp {
                 window.hide();
             }
             HudMode::Preview => {
+                let hud_state = hud_state.clone();
+                glib::timeout_add_local(Duration::from_secs(3), move || {
+                    let next = match *hud_state.borrow() {
+                        HudState::Recording => HudState::Transcribing,
+                        _ => HudState::Recording,
+                    };
+                    *hud_state.borrow_mut() = next;
+                    ControlFlow::Continue
+                });
                 window.show();
             }
         }
@@ -234,7 +257,14 @@ mod imp {
         }
     }
 
-    fn draw_wave(cr: &Context, width: i32, height: i32, phase: f64, state: HudState) {
+    fn draw_wave(
+        cr: &Context,
+        width: i32,
+        height: i32,
+        phase: f64,
+        state: HudState,
+        rec_color: (f64, f64, f64),
+    ) {
         let w = width.max(1) as f64;
         let h = height.max(1) as f64;
 
@@ -244,7 +274,7 @@ mod imp {
         let _ = cr.fill();
 
         let (r, g, b) = match state {
-            HudState::Recording => (0.99, 0.38, 0.55),
+            HudState::Recording => rec_color,
             HudState::Transcribing => (0.40, 0.62, 0.96),
             HudState::Hidden => (0.36, 0.40, 0.45),
         };
