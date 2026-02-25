@@ -9,15 +9,12 @@ wayvoice is a Wayland voice-to-text daemon that records audio, transcribes with 
 - Prefer `just` recipes over raw commands.
 - Primary dev loop command is:
   - `just watch` (runs in zmx)
-- Use `just watch-raw` only if explicitly requested.
 
 ## 2) After code changes
 
 - Run validation before finishing:
   - `just fmt`
   - `just test`
-- Keep edits surgical and scoped to the user request.
-- Avoid unrelated refactors.
 
 ## 3) Runtime / debugging workflow
 
@@ -32,13 +29,8 @@ wayvoice is a Wayland voice-to-text daemon that records audio, transcribes with 
 - Prefer runtime logging via `log` macros (`debug!`, `info!`, `warn!`, `error!`).
 - Keep `println!` only for intentional CLI output.
 
-## 5) Safety constraints
-
-- Be conservative with transcription filtering/guards to avoid regressions on valid speech.
-- Do not change user-facing behavior broadly unless requested.
-
-## 6) Quick project facts (only what agents need)
+## 5) Quick project facts
 
 - Binary subcommands: `serve`, `toggle`, `cancel`, `status`, `once`
-- Config path: `~/.config/wayvoice.toml`
+- Config path: `~/.config/wayvoice.toml` (dont read it directly, may contain secrets)
 - Watch session name convention: `wayvoice`

@@ -53,6 +53,7 @@ fn default_prompt() -> String {
 }
 
 fn default_replacements() -> HashMap<String, String> {
+    // Keep this list conservative to avoid accidental rewrites.
     [
         // Wayland compositors
         ("hyperland", "Hyprland"),
@@ -66,7 +67,7 @@ fn default_replacements() -> HashMap<String, String> {
         // Nix
         ("nix os", "NixOS"),
         ("home manager", "Home Manager"),
-        // Claude
+        // Claude + tooling
         ("cloude code", "Claude Code"),
         ("cloud code", "Claude Code"),
         ("cloudmd", "CLAUDE.md"),
@@ -74,19 +75,12 @@ fn default_replacements() -> HashMap<String, String> {
         ("claude md", "CLAUDE.md"),
         ("weybar", "waybar"),
         ("vtype", "wtype"),
-        ("jus", "just"),
-        // Apps
         ("ghosty", "Ghostty"),
-        ("sunbrowser", "Zen browser"),
         ("tail net", "tailnet"),
-        ("urinal", "journal"),
         ("pmpm", "pnpm"),
-        ("LTAB", "Alt Tab"),
-        (".file", "dotfile"),
+        // Project-specific
         ("wavevoice", "wayvoice"),
-        ("nanocloud", "nanoclaw"),
-        ("justt", "just"),
-        ("justtwatch", "just watch"),
+        ("jus", "just"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
