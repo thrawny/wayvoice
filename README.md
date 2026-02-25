@@ -23,21 +23,41 @@ Voice-to-text for Wayland.
 
 ### 1) Build and install with Cargo
 
+Without HUD (minimal dependencies):
+
 ```bash
-git clone <your-repo-url> wayvoice
-cd wayvoice
 cargo install --path . --locked
 ```
 
-This installs the `wayvoice` binary to `~/.cargo/bin/wayvoice`.
+With HUD overlay (shows recording/transcribing state):
 
-### 2) Make sure runtime tools are installed (Arch)
+```bash
+cargo install --path . --locked --features hud-ui
+```
+
+The HUD feature requires GTK4 and gtk4-layer-shell development libraries.
+
+### 2) HUD dependencies
+
+The `hud-ui` feature links against GTK4 and gtk4-layer-shell. Install the dev packages before building:
+
+**Arch:**
+
+```bash
+sudo pacman -S gtk4 gtk4-layer-shell
+```
+
+**Nix / NixOS:**
+
+If you use the project's `flake.nix` dev shell, these are already included.
+
+### 3) Runtime tools (Arch)
 
 ```bash
 sudo pacman -S pipewire wtype wl-clipboard libnotify
 ```
 
-### 3) Runtime tools on Nix / NixOS
+### 4) Runtime tools on Nix / NixOS
 
 On NixOS, add these packages to your system or Home Manager config:
 
@@ -78,6 +98,9 @@ language = "en"
 
 [replacements]
 "hyperland" = "Hyprland"
+
+# HUD recording color (hex, default: #fc618d)
+# hud_color = "#fc618d"
 ```
 
 Replacements are **additive by default**: your `[replacements]` are merged on top of built-in defaults.
@@ -128,6 +151,22 @@ Notes:
 
 If you prefer **hold-to-record**, trigger `wayvoice toggle` on both `press` and `release`.
 
+### HUD overlay
+
+If built with `--features hud-ui`, the daemon automatically spawns a layer-shell HUD that shows recording (pink waveform) and transcribing (blue waveform) states.
+
+The HUD is enabled by default. Disable it with:
+
+```bash
+VOICE_HUD=0 wayvoice serve
+```
+
+Preview the HUD without running the daemon:
+
+```bash
+wayvoice hud-preview    # or: just hud-preview
+```
+
 ### One-shot mode (no daemon)
 
 ```bash
@@ -141,6 +180,7 @@ Records until Enter, transcribes, and prints text to stdout.
 ## Environment variables
 
 - `VOICE_PROVIDER` — override provider (`groq` or `openai`)
+- `VOICE_HUD` — `0` / `false` / `off` to disable the HUD overlay
 - `VOICE_INJECT_MODE` — `clipboard` (default) or `wtype`
 - `VOICE_WTYPE_DELAY_MS` — delay before paste/type
 - `VOICE_WTYPE_KEY_DELAY_MS` — per-key delay for `wtype`
