@@ -41,6 +41,7 @@ mod imp {
     use std::os::unix::net::UnixStream;
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use wayvoice::config::{load_config, parse_hex_color};
 
@@ -73,6 +74,12 @@ mod imp {
                 _ => Self::Hidden,
             }
         }
+    }
+
+    #[derive(Clone, Copy)]
+    struct StatusSnapshot {
+        state: HudState,
+        level: f32,
     }
 
     pub fn run_hud() {
@@ -188,14 +195,20 @@ mod imp {
 
         match mode {
             HudMode::Daemon => {
+                let status_snapshot = start_status_worker();
                 let poll_window = window.clone();
                 let hud_state = hud_state.clone();
                 let audio_level = audio_level.clone();
                 glib::timeout_add_local(Duration::from_millis(STATUS_POLL_MS), move || {
-                    let (state, level) = match query_daemon_status() {
-                        Some(response) => parse_status_response(&response),
-                        None => (HudState::Hidden, 0.0),
+                    let snapshot = match status_snapshot.lock() {
+                        Ok(guard) => *guard,
+                        Err(_) => StatusSnapshot {
+                            state: HudState::Hidden,
+                            level: 0.0,
+                        },
                     };
+                    let state = snapshot.state;
+                    let level = snapshot.level;
 
                     if *hud_state.borrow() != state {
                         *hud_state.borrow_mut() = state;
@@ -259,6 +272,37 @@ mod imp {
             .and_then(|s| s.parse::<f32>().ok())
             .unwrap_or(0.0);
         (HudState::from_status(state_str), level)
+    }
+
+    fn start_status_worker() -> Arc<Mutex<StatusSnapshot>> {
+        let snapshot = Arc::new(Mutex::new(StatusSnapshot {
+            state: HudState::Hidden,
+            level: 0.0,
+        }));
+        let snapshot_for_thread = Arc::clone(&snapshot);
+
+        std::thread::spawn(move || {
+            loop {
+                let next = match query_daemon_status() {
+                    Some(response) => {
+                        let (state, level) = parse_status_response(&response);
+                        StatusSnapshot { state, level }
+                    }
+                    None => StatusSnapshot {
+                        state: HudState::Hidden,
+                        level: 0.0,
+                    },
+                };
+
+                if let Ok(mut guard) = snapshot_for_thread.lock() {
+                    *guard = next;
+                }
+
+                std::thread::sleep(Duration::from_millis(STATUS_POLL_MS));
+            }
+        });
+
+        snapshot
     }
 
     fn configure_layer_shell(window: &ApplicationWindow) {
