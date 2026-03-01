@@ -5,6 +5,32 @@ use wayvoice::config::Config;
 
 const KEEP_LAST_RECORDINGS: usize = 10;
 
+pub async fn save_wav_data_for_debug(wav_data: &[u8], config: &Config) {
+    if !config.debug_recordings || wav_data.is_empty() {
+        return;
+    }
+
+    let dir = recordings_dir(config);
+    if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+        warn!("Failed to create debug recordings dir {dir:?}: {e}");
+        return;
+    }
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let dest = dir.join(format!("{timestamp:020}.wav"));
+
+    match tokio::fs::write(&dest, wav_data).await {
+        Ok(_) => {
+            debug!("Saved debug recording: {dest:?}");
+            prune_old_recordings(&dir).await;
+        }
+        Err(e) => warn!("Failed to save debug recording {dest:?}: {e}"),
+    }
+}
+
 pub async fn save_recording_for_debug(audio_file: &Path, config: &Config) {
     if !config.debug_recordings {
         return;

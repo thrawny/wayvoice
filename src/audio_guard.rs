@@ -110,6 +110,27 @@ fn pcm_payload(audio_data: &[u8]) -> &[u8] {
     audio_data.get(WAV_HEADER_BYTES..).unwrap_or(&[])
 }
 
+/// Wrap raw s16le PCM data in a valid WAV container (16 kHz, mono, 16-bit).
+pub fn wrap_pcm_as_wav(pcm: &[u8]) -> Vec<u8> {
+    let data_len = pcm.len() as u32;
+    let mut wav = Vec::with_capacity(44 + pcm.len());
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes()); // chunk size
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM format
+    wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+    wav.extend_from_slice(&16000u32.to_le_bytes()); // sample rate
+    wav.extend_from_slice(&32000u32.to_le_bytes()); // byte rate
+    wav.extend_from_slice(&2u16.to_le_bytes()); // block align
+    wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+    wav.extend_from_slice(pcm);
+    wav
+}
+
 pub fn reject_before_transcribe(
     _provider: Provider,
     metrics: AudioMetrics,
@@ -324,5 +345,19 @@ mod tests {
         let m = analyze_audio(&wav);
         assert!(!m.too_short);
         assert!(!m.likely_silent);
+    }
+
+    #[test]
+    fn wrap_pcm_creates_valid_wav() {
+        let samples: Vec<i16> = (0..8000).map(|i| ((i % 100) as i16) * 50).collect();
+        let pcm: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let wav = wrap_pcm_as_wav(&pcm);
+
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+
+        let m = analyze_audio(&wav);
+        assert_eq!(m.sample_count, 8000);
+        assert!(!m.too_short);
     }
 }

@@ -48,8 +48,9 @@ mod imp {
     const HUD_APP_ID_PREVIEW: &str = "com.thrawny.wayvoice.hud.preview";
     const HUD_WIDTH: i32 = 260;
     const HUD_HEIGHT: i32 = 72;
-    const STATUS_POLL_MS: u64 = 180;
+    const STATUS_POLL_MS: u64 = 50;
     const WAVE_FRAME_MS: u64 = 33;
+    const LEVEL_LERP_ALPHA: f32 = 0.3;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum HudMode {
@@ -146,10 +147,13 @@ mod imp {
             HudMode::Daemon => HudState::Hidden,
             HudMode::Preview => HudState::Recording,
         }));
+        let audio_level = Rc::new(Cell::new(0.0f32));
+        let display_level = Rc::new(Cell::new(0.0f32));
 
         {
             let phase = phase.clone();
             let hud_state = hud_state.clone();
+            let display_level = display_level.clone();
             wave.set_draw_func(move |_, cr, width, height| {
                 draw_wave(
                     cr,
@@ -158,6 +162,7 @@ mod imp {
                     phase.get(),
                     *hud_state.borrow(),
                     rec_color,
+                    display_level.get() as f64,
                 );
             });
         }
@@ -165,7 +170,16 @@ mod imp {
         {
             let wave = wave.clone();
             let phase = phase.clone();
+            let audio_level = audio_level.clone();
+            let display_level = display_level.clone();
             glib::timeout_add_local(Duration::from_millis(WAVE_FRAME_MS), move || {
+                // Boost raw RMS (typically 0.01-0.15) into a visible range via sqrt curve
+                let raw = audio_level.get();
+                let target = (raw * 10.0).min(1.0).sqrt();
+
+                let current = display_level.get();
+                display_level.set(current + (target - current) * LEVEL_LERP_ALPHA);
+
                 phase.set((phase.get() + 0.09) % (std::f64::consts::TAU));
                 wave.queue_draw();
                 ControlFlow::Continue
@@ -176,14 +190,17 @@ mod imp {
             HudMode::Daemon => {
                 let poll_window = window.clone();
                 let hud_state = hud_state.clone();
+                let audio_level = audio_level.clone();
                 glib::timeout_add_local(Duration::from_millis(STATUS_POLL_MS), move || {
-                    let state = query_daemon_status()
-                        .map(|s| HudState::from_status(&s))
-                        .unwrap_or(HudState::Hidden);
+                    let (state, level) = match query_daemon_status() {
+                        Some(response) => parse_status_response(&response),
+                        None => (HudState::Hidden, 0.0),
+                    };
 
                     if *hud_state.borrow() != state {
                         *hud_state.borrow_mut() = state;
                     }
+                    audio_level.set(level);
 
                     match state {
                         HudState::Hidden => poll_window.hide(),
@@ -200,18 +217,48 @@ mod imp {
                 window.hide();
             }
             HudMode::Preview => {
-                let hud_state = hud_state.clone();
-                glib::timeout_add_local(Duration::from_secs(3), move || {
-                    let next = match *hud_state.borrow() {
-                        HudState::Recording => HudState::Transcribing,
-                        _ => HudState::Recording,
-                    };
-                    *hud_state.borrow_mut() = next;
+                let preview_phase = Rc::new(Cell::new(0.0f64));
+                let audio_level_for_sim = audio_level.clone();
+                let hud_state_for_sim = hud_state.clone();
+                glib::timeout_add_local(Duration::from_millis(STATUS_POLL_MS), move || {
+                    let p = preview_phase.get() + 0.07;
+                    preview_phase.set(p);
+
+                    let state = *hud_state_for_sim.borrow();
+                    if state == HudState::Recording {
+                        audio_level_for_sim.set((p.sin().abs() * 0.7 + 0.1) as f32);
+                    } else {
+                        audio_level_for_sim.set(0.0);
+                    }
+
                     ControlFlow::Continue
                 });
+
+                {
+                    let hud_state_for_toggle = hud_state.clone();
+                    glib::timeout_add_local(Duration::from_secs(3), move || {
+                        let next = match *hud_state_for_toggle.borrow() {
+                            HudState::Recording => HudState::Transcribing,
+                            _ => HudState::Recording,
+                        };
+                        *hud_state_for_toggle.borrow_mut() = next;
+                        ControlFlow::Continue
+                    });
+                }
+
                 window.show();
             }
         }
+    }
+
+    fn parse_status_response(response: &str) -> (HudState, f32) {
+        let mut parts = response.splitn(2, ' ');
+        let state_str = parts.next().unwrap_or("idle");
+        let level = parts
+            .next()
+            .and_then(|s| s.parse::<f32>().ok())
+            .unwrap_or(0.0);
+        (HudState::from_status(state_str), level)
     }
 
     fn configure_layer_shell(window: &ApplicationWindow) {
@@ -264,6 +311,7 @@ mod imp {
         phase: f64,
         state: HudState,
         rec_color: (f64, f64, f64),
+        level: f64,
     ) {
         let w = width.max(1) as f64;
         let h = height.max(1) as f64;
@@ -279,16 +327,7 @@ mod imp {
             HudState::Hidden => (0.36, 0.40, 0.45),
         };
 
-        // Pulsing recording dot
-        let bar_left = if state == HudState::Recording {
-            let pulse = 0.55 + (phase * 1.6).sin().abs() * 0.45;
-            cr.set_source_rgba(r, g, b, pulse);
-            cr.arc(18.0, h * 0.5, 3.2, 0.0, std::f64::consts::TAU);
-            let _ = cr.fill();
-            28.0
-        } else {
-            14.0
-        };
+        let bar_left = 14.0;
 
         // Bar field
         let bar_right = w - 14.0;
@@ -305,7 +344,11 @@ mod imp {
             let center = (1.0 - ((i as f64 / (bars - 1) as f64) - 0.5).abs() * 1.5).max(0.18);
 
             let motion = match state {
-                HudState::Recording => (phase + i as f64 * 0.44).sin().abs(),
+                HudState::Recording => {
+                    let bar_phase = (phase + i as f64 * 0.44).sin().abs();
+                    let variation = 0.7 + bar_phase * 0.3;
+                    level * variation
+                }
                 HudState::Transcribing => 0.32 + (phase * 0.5 + i as f64 * 0.19).sin().abs() * 0.28,
                 HudState::Hidden => 0.08,
             };

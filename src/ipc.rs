@@ -59,7 +59,12 @@ async fn handle_client(stream: UnixStream, daemon: Arc<Mutex<Daemon>>) {
             }
             "status" => {
                 let d = daemon.lock().await;
-                d.status().to_string()
+                let status = d.status();
+                if status == "recording" {
+                    format!("{status} {:.3}", d.audio_level())
+                } else {
+                    status.to_string()
+                }
             }
             _ => "unknown".to_string(),
         };

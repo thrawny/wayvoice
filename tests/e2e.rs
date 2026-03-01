@@ -1,5 +1,8 @@
 use std::path::PathBuf;
-use wayvoice::audio_guard::{analyze_audio, reject_before_transcribe, reject_transcript};
+use wayvoice::audio_guard::{
+    analyze_audio, reject_before_transcribe, reject_transcript, wrap_pcm_as_wav,
+};
+use wayvoice::audio_level::rms_level;
 use wayvoice::config::{Config, Provider};
 use wayvoice::transcription::transcribe_audio;
 
@@ -31,6 +34,33 @@ fn silence_rejected_by_audio_guard() {
 
     let result = reject_before_transcribe(Provider::Groq, metrics);
     assert_eq!(result, Some("No microphone input detected"));
+}
+
+#[test]
+fn rms_level_on_silence_fixture() {
+    let wav = std::fs::read(fixture("silence.wav")).unwrap();
+    // Skip WAV header (44 bytes) to get raw PCM
+    let pcm = &wav[44..];
+    let level = rms_level(pcm);
+    assert!(
+        level < 0.01,
+        "silence fixture should have near-zero RMS, got {level}"
+    );
+}
+
+#[test]
+fn wrap_pcm_as_wav_roundtrips_through_analyze() {
+    let samples: Vec<i16> = (0..16000)
+        .map(|i| if i % 20 < 10 { 1500 } else { -1500 })
+        .collect();
+    let pcm: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+    let wav = wrap_pcm_as_wav(&pcm);
+
+    let metrics = analyze_audio(&wav);
+    assert_eq!(metrics.sample_count, 16000);
+    assert!(!metrics.too_short);
+    assert!(!metrics.likely_silent);
+    assert_eq!(reject_before_transcribe(Provider::Groq, metrics), None);
 }
 
 // ── Integration tests (require GROQ_API_KEY) ──────────────────────

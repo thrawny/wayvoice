@@ -1,12 +1,16 @@
-use crate::debug_recordings::save_recording_for_debug;
+use crate::debug_recordings::save_wav_data_for_debug;
 use crate::inject::{inject_text, notify};
 use log::{debug, warn};
-use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
+use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
+use tokio::task::JoinHandle;
 use wayvoice::audio_guard::{
-    AudioMetrics, analyze_audio, reject_before_transcribe, reject_transcript,
+    AudioMetrics, analyze_audio, reject_before_transcribe, reject_transcript, wrap_pcm_as_wav,
 };
+use wayvoice::audio_level::rms_level;
 use wayvoice::config::Config;
 use wayvoice::text::apply_replacements;
 
@@ -44,22 +48,29 @@ pub struct Daemon {
     state: State,
     config: Config,
     recorder: Option<Child>,
-    audio_file: PathBuf,
+    pcm_reader: Option<JoinHandle<()>>,
+    pcm_buffer: Arc<Mutex<Vec<u8>>>,
+    audio_level: Arc<AtomicU32>,
 }
 
 impl Daemon {
     pub fn new(config: Config) -> Self {
-        let audio_file = std::env::temp_dir().join("voice-recording.wav");
         Self {
             state: State::Idle,
             config,
             recorder: None,
-            audio_file,
+            pcm_reader: None,
+            pcm_buffer: Arc::new(Mutex::new(Vec::new())),
+            audio_level: Arc::new(AtomicU32::new(0.0f32.to_bits())),
         }
     }
 
     pub fn status(&self) -> &'static str {
         self.state.as_str()
+    }
+
+    pub fn audio_level(&self) -> f32 {
+        f32::from_bits(self.audio_level.load(Ordering::Relaxed))
     }
 
     pub async fn toggle(&mut self) -> ToggleResult {
@@ -79,7 +90,15 @@ impl Daemon {
     pub async fn cancel(&mut self) -> &'static str {
         if let Some(mut child) = self.recorder.take() {
             let _ = child.kill().await;
+            let _ = child.wait().await;
         }
+        if let Some(reader) = self.pcm_reader.take()
+            && let Err(e) = reader.await
+        {
+            warn!("PCM reader task failed during cancel: {e}");
+        }
+        self.pcm_buffer.lock().unwrap().clear();
+        self.audio_level.store(0.0f32.to_bits(), Ordering::Relaxed);
         self.state = State::Idle;
         notify("Cancelled", &self.config).await;
         "cancelled"
@@ -118,7 +137,13 @@ impl Daemon {
     }
 
     async fn start_recording(&mut self) {
-        let _ = tokio::fs::remove_file(&self.audio_file).await;
+        if let Some(reader) = self.pcm_reader.take()
+            && let Err(e) = reader.await
+        {
+            warn!("PCM reader task failed before start: {e}");
+        }
+        self.pcm_buffer.lock().unwrap().clear();
+        self.audio_level.store(0.0f32.to_bits(), Ordering::Relaxed);
 
         let child = Command::new("pw-record")
             .args([
@@ -128,17 +153,24 @@ impl Daemon {
                 "16000",
                 "--channels",
                 "1",
-                self.audio_file.to_str().unwrap(),
+                "--raw",
+                "-",
             ])
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn();
 
         match child {
-            Ok(child) => {
+            Ok(mut child) => {
+                let stdout = child.stdout.take().expect("stdout piped");
                 self.recorder = Some(child);
                 self.state = State::Recording;
+
+                let buffer = self.pcm_buffer.clone();
+                let level = self.audio_level.clone();
+                self.pcm_reader = Some(tokio::spawn(read_pcm_stream(stdout, buffer, level)));
+
                 notify("Recording...", &self.config).await;
             }
             Err(e) => {
@@ -148,7 +180,7 @@ impl Daemon {
         }
     }
 
-    /// Stop recording, read & validate audio, set state to Transcribing.
+    /// Stop recording, validate audio, set state to Transcribing.
     /// Returns a job for the caller to run outside the lock, or None if
     /// the audio was rejected early.
     async fn prepare_transcription(&mut self) -> Option<TranscriptionJob> {
@@ -159,38 +191,27 @@ impl Daemon {
             let _ = child.kill().await;
             let _ = child.wait().await;
         }
-        save_recording_for_debug(&self.audio_file, &self.config).await;
+        if let Some(reader) = self.pcm_reader.take()
+            && let Err(e) = reader.await
+        {
+            warn!("PCM reader task failed during stop: {e}");
+        }
+        self.audio_level.store(0.0f32.to_bits(), Ordering::Relaxed);
         debug!("stop_recording: {:?}", stop_start.elapsed());
 
-        match tokio::fs::metadata(&self.audio_file).await {
-            Ok(meta) if meta.len() < 1000 => {
-                eprintln!("No audio recorded");
-                notify("No audio recorded", &self.config).await;
-                self.state = State::Idle;
-                return None;
-            }
-            Err(_) => {
-                eprintln!("No audio file");
-                notify("Recording failed", &self.config).await;
-                self.state = State::Idle;
-                return None;
-            }
-            Ok(meta) => {
-                debug!("audio bytes: {}", meta.len());
-            }
+        let pcm_data = std::mem::take(&mut *self.pcm_buffer.lock().unwrap());
+
+        if pcm_data.is_empty() {
+            eprintln!("No audio recorded");
+            notify("No audio recorded", &self.config).await;
+            self.state = State::Idle;
+            return None;
         }
 
-        let read_start = std::time::Instant::now();
-        let audio_data = match tokio::fs::read(&self.audio_file).await {
-            Ok(data) => data,
-            Err(e) => {
-                eprintln!("Failed to read audio file: {e}");
-                notify(&format!("Error: {e}"), &self.config).await;
-                self.state = State::Idle;
-                return None;
-            }
-        };
-        debug!("file_read: {:?}", read_start.elapsed());
+        debug!("pcm bytes: {}", pcm_data.len());
+
+        let audio_data = wrap_pcm_as_wav(&pcm_data);
+        save_wav_data_for_debug(&audio_data, &self.config).await;
 
         let metrics = analyze_audio(&audio_data);
         debug!(
@@ -220,4 +241,45 @@ impl Daemon {
             total_start,
         })
     }
+}
+
+/// Read raw s16le PCM from pw-record stdout, accumulate in buffer,
+/// and update audio level every ~50ms window.
+async fn read_pcm_stream(
+    mut stdout: tokio::process::ChildStdout,
+    buffer: Arc<Mutex<Vec<u8>>>,
+    level: Arc<AtomicU32>,
+) {
+    // ~50ms of audio at 16kHz mono s16 = 1600 samples × 2 bytes
+    const WINDOW_BYTES: usize = 3200;
+    let mut window = vec![0u8; WINDOW_BYTES];
+    let mut window_pos = 0;
+    let mut read_buf = [0u8; 4096];
+
+    loop {
+        let n = match stdout.read(&mut read_buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+
+        buffer.lock().unwrap().extend_from_slice(&read_buf[..n]);
+
+        // Fill rolling window for RMS computation
+        let mut consumed = 0;
+        while consumed < n {
+            let to_copy = (WINDOW_BYTES - window_pos).min(n - consumed);
+            window[window_pos..window_pos + to_copy]
+                .copy_from_slice(&read_buf[consumed..consumed + to_copy]);
+            window_pos += to_copy;
+            consumed += to_copy;
+
+            if window_pos == WINDOW_BYTES {
+                let rms = rms_level(&window);
+                level.store(rms.to_bits(), Ordering::Relaxed);
+                window_pos = 0;
+            }
+        }
+    }
+
+    level.store(0.0f32.to_bits(), Ordering::Relaxed);
 }
