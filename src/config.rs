@@ -103,6 +103,7 @@ fn default_replacements() -> HashMap<String, String> {
         ("sembrowser", "zen browser"),
         ("Josswitch", "just switch"),
         ("marked down", "markdown"),
+        ("c-lire", "cli"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
