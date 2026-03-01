@@ -1,16 +1,11 @@
-mod audio_guard;
-mod config;
 mod daemon;
 mod debug_recordings;
 mod hud;
 mod inject;
 mod ipc;
 mod oneshot;
-mod text;
-mod transcription;
 
 use clap::{Parser, Subcommand};
-use config::load_config;
 use daemon::Daemon;
 use ipc::{run_server, send_command};
 use log::{debug, warn};
@@ -18,6 +13,7 @@ use oneshot::run_once;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use wayvoice::config::load_config;
 
 #[derive(Parser)]
 #[command(name = "wayvoice", about = "Voice-to-text for Wayland")]

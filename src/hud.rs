@@ -27,7 +27,6 @@ pub fn run_hud_preview() {
 
 #[cfg(feature = "hud-ui")]
 mod imp {
-    use crate::config::{load_config, parse_hex_color};
     use crate::ipc::socket_path;
     use gtk::cairo::Context;
     use gtk::glib::{self, ControlFlow};
@@ -43,6 +42,7 @@ mod imp {
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
     use std::time::Duration;
+    use wayvoice::config::{load_config, parse_hex_color};
 
     const HUD_APP_ID_DAEMON: &str = "com.thrawny.wayvoice.hud";
     const HUD_APP_ID_PREVIEW: &str = "com.thrawny.wayvoice.hud.preview";

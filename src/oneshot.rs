@@ -1,11 +1,11 @@
-use crate::audio_guard::{analyze_audio, reject_before_transcribe, reject_transcript};
-use crate::config::Config;
 use crate::debug_recordings::save_recording_for_debug;
-use crate::text::apply_replacements;
-use crate::transcription::transcribe_audio;
 use log::debug;
 use std::process::Stdio;
 use tokio::process::Command;
+use wayvoice::audio_guard::{analyze_audio, reject_before_transcribe, reject_transcript};
+use wayvoice::config::Config;
+use wayvoice::text::apply_replacements;
+use wayvoice::transcription::transcribe_audio;
 
 pub async fn run_once(config: Config) {
     let audio_file = std::env::temp_dir().join("voice-recording.wav");

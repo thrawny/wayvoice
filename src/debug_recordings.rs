@@ -1,7 +1,7 @@
-use crate::config::Config;
 use log::{debug, warn};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use wayvoice::config::Config;
 
 const KEEP_LAST_RECORDINGS: usize = 10;
 

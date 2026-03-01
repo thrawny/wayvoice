@@ -1,6 +1,6 @@
-use crate::config::Config;
 use log::debug;
 use tokio::process::Command;
+use wayvoice::config::Config;
 
 pub async fn inject_text(text: &str, config: &Config) {
     if config.inject_mode == "clipboard" {

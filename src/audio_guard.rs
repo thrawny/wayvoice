@@ -1,11 +1,16 @@
 use crate::config::Provider;
 
 const WAV_HEADER_BYTES: usize = 44;
-const MIN_PCM_BYTES: usize = 6000;
-const MIN_SILENCE_SAMPLES: u64 = 8000;
-const SILENCE_MEAN_ABS_MAX: f64 = 6.0;
-const SILENCE_MAX_ABS_MAX: i32 = 120;
-const SHORT_HALLUCINATION_PCM_BYTES: usize = 12000;
+/// ~0.5 sec at 16 kHz mono 16-bit — anything shorter is not intentional speech.
+const MIN_PCM_BYTES: usize = 16000;
+/// Need at least this many samples before we trust the silence heuristic.
+const MIN_SILENCE_SAMPLES: u64 = 4000;
+/// Real microphone ambient noise in a quiet room is typically mean_abs 20–200.
+const SILENCE_MEAN_ABS_MAX: f64 = 150.0;
+/// Ambient peaks easily reach 500–2000 even in a quiet room.
+const SILENCE_MAX_ABS_MAX: i32 = 1500;
+/// Check hallucination patterns for recordings up to ~1.5 sec.
+const SHORT_HALLUCINATION_PCM_BYTES: usize = 48000;
 
 #[derive(Debug, Clone, Copy)]
 pub struct AudioMetrics {
@@ -105,12 +110,15 @@ fn pcm_payload(audio_data: &[u8]) -> &[u8] {
     audio_data.get(WAV_HEADER_BYTES..).unwrap_or(&[])
 }
 
-pub fn reject_before_transcribe(provider: Provider, metrics: AudioMetrics) -> Option<&'static str> {
+pub fn reject_before_transcribe(
+    _provider: Provider,
+    metrics: AudioMetrics,
+) -> Option<&'static str> {
     if metrics.too_short {
         return Some("Recording too short");
     }
 
-    if provider == Provider::Groq && metrics.likely_silent {
+    if metrics.likely_silent {
         return Some("No microphone input detected");
     }
 
@@ -161,11 +169,23 @@ fn normalize(text: &str) -> String {
     cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+const HALLUCINATION_PHRASES: &[&str] = &[
+    "thank you",
+    "thanks for watching",
+    "thanks for listening",
+    "please subscribe",
+    "like and subscribe",
+    "see you next time",
+    "see you in the next",
+    "goodbye",
+    "bye bye",
+    "you",
+];
+
 fn is_common_hallucination(normalized: &str) -> bool {
-    matches!(
-        normalized,
-        "thank you" | "thank you for watching" | "thanks for watching" | "you"
-    )
+    HALLUCINATION_PHRASES
+        .iter()
+        .any(|phrase| normalized == *phrase || normalized.starts_with(phrase))
 }
 
 #[cfg(test)]
@@ -208,7 +228,8 @@ mod tests {
 
     #[test]
     fn detects_too_short_payload() {
-        let wav = wav_from_samples(&vec![0i16; 2000]);
+        // 4000 samples = 8000 bytes < MIN_PCM_BYTES (16000)
+        let wav = wav_from_samples(&vec![0i16; 4000]);
         let m = analyze_audio(&wav);
         assert!(m.too_short);
         assert_eq!(
@@ -229,7 +250,32 @@ mod tests {
     }
 
     #[test]
+    fn detects_silence_for_openai_too() {
+        let wav = wav_from_samples(&vec![0i16; 16000]);
+        let m = analyze_audio(&wav);
+        assert!(m.likely_silent);
+        assert_eq!(
+            reject_before_transcribe(Provider::Openai, m),
+            Some("No microphone input detected")
+        );
+    }
+
+    #[test]
+    fn ambient_noise_detected_as_silence() {
+        // Simulate low-level ambient mic noise (mean_abs ~50, max ~500)
+        let samples: Vec<i16> = (0..16000).map(|i| ((i % 100) as i16 - 50) * 3).collect();
+        let wav = wav_from_samples(&samples);
+        let m = analyze_audio(&wav);
+        assert!(
+            m.likely_silent,
+            "ambient noise should be detected as silent: mean_abs={:.1}, max_abs={}",
+            m.mean_abs, m.max_abs
+        );
+    }
+
+    #[test]
     fn does_not_flag_voice_like_signal() {
+        // Simulate speech-level signal (mean_abs ~1500, max_abs = 1500)
         let samples: Vec<i16> = (0..16000)
             .map(|i| if i % 20 < 10 { 1500 } else { -1500 })
             .collect();
@@ -242,12 +288,31 @@ mod tests {
 
     #[test]
     fn flags_short_thank_you_as_hallucination() {
-        let wav = wav_from_samples(&vec![0i16; 4000]);
+        // 10000 samples = 20000 bytes < SHORT_HALLUCINATION_PCM_BYTES (48000)
+        let wav = wav_from_samples(&vec![500i16; 10000]);
         let m = analyze_audio(&wav);
         assert_eq!(
             reject_transcript(Provider::Groq, "Thank you.", m),
             Some("No microphone input detected")
         );
+    }
+
+    #[test]
+    fn flags_hallucination_variants() {
+        let wav = wav_from_samples(&vec![500i16; 10000]);
+        let m = analyze_audio(&wav);
+        for phrase in &[
+            "Thank you for watching!",
+            "Thanks for listening.",
+            "Please subscribe",
+            "See you next time!",
+        ] {
+            assert_eq!(
+                reject_transcript(Provider::Groq, phrase, m),
+                Some("No microphone input detected"),
+                "should reject: {phrase}"
+            );
+        }
     }
 
     #[test]

@@ -1,10 +1,10 @@
 use crate::daemon::{Daemon, ToggleResult};
-use crate::transcription::transcribe_audio;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Mutex;
+use wayvoice::transcription::transcribe_audio;
 
 pub fn socket_path() -> PathBuf {
     std::env::var("XDG_RUNTIME_DIR")

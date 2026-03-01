@@ -1,14 +1,14 @@
-use crate::audio_guard::{
-    AudioMetrics, analyze_audio, reject_before_transcribe, reject_transcript,
-};
-use crate::config::Config;
 use crate::debug_recordings::save_recording_for_debug;
 use crate::inject::{inject_text, notify};
-use crate::text::apply_replacements;
 use log::{debug, warn};
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::{Child, Command};
+use wayvoice::audio_guard::{
+    AudioMetrics, analyze_audio, reject_before_transcribe, reject_transcript,
+};
+use wayvoice::config::Config;
+use wayvoice::text::apply_replacements;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum State {
