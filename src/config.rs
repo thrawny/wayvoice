@@ -104,6 +104,8 @@ fn default_replacements() -> HashMap<String, String> {
         ("Josswitch", "just switch"),
         ("marked down", "markdown"),
         ("c-lire", "cli"),
+        ("tommel", "TOML"),
+        ("in the N", "in the end"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
