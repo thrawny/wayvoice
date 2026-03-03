@@ -26,7 +26,7 @@ hud-preview:
 
 # Install to ~/.cargo/bin
 install:
-    cargo install --path . --locked --force
+    cargo install --features hud-ui --path . --locked --force
 
 # Run clippy (auto-fix)
 clippy:

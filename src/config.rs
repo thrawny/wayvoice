@@ -100,6 +100,8 @@ fn default_replacements() -> HashMap<String, String> {
         (".files", "dotfiles"),
         ("adjustswitch", "just switch"),
         ("grok", "Groq"),
+        ("sembrowser", "zen browser"),
+        ("Josswitch", "just switch"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
