@@ -83,8 +83,7 @@ fn real_speech_passes_audio_guard() {
     assert!(
         !metrics.likely_silent,
         "real speech flagged as silent: mean_abs={:.1} max_abs={}",
-        metrics.mean_abs,
-        metrics.max_abs
+        metrics.mean_abs, metrics.max_abs
     );
     assert_eq!(reject_before_transcribe(Provider::Groq, metrics), None);
 }
