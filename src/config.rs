@@ -86,7 +86,7 @@ fn default_keywords() -> Vec<String> {
         "Groq",
         "TOML",
         "openclaw",
-        "zmx"
+        "zmx",
     ]
     .into_iter()
     .map(String::from)
