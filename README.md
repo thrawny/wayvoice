@@ -35,31 +35,19 @@ From GitHub (replace `OWNER/REPO`):
 nix profile install github:OWNER/REPO#wayvoice
 ```
 
-HUD-enabled variant:
-
-```bash
-nix profile install github:OWNER/REPO#wayvoice-hud
-```
-
 ### 2) Build and install with Cargo
 
-Without HUD (minimal dependencies):
+Install:
 
 ```bash
 cargo install --path . --locked
 ```
 
-With HUD overlay (shows recording/transcribing state):
-
-```bash
-cargo install --path . --locked --features hud-ui
-```
-
-The HUD feature requires GTK4 and gtk4-layer-shell development libraries.
+The binary always includes the HUD integration and links against GTK4 + gtk4-layer-shell.
 
 ### 3) HUD dependencies
 
-The `hud-ui` feature links against GTK4 and gtk4-layer-shell. Install the dev packages before building:
+wayvoice links against GTK4 and gtk4-layer-shell. Install the dev packages before building:
 
 **Arch:**
 
@@ -177,7 +165,7 @@ If you prefer **hold-to-record**, trigger `wayvoice toggle` on both `press` and 
 
 ### HUD overlay
 
-If built with `--features hud-ui`, the daemon automatically spawns a layer-shell HUD that shows recording (pink waveform) and transcribing (blue waveform) states.
+The daemon automatically spawns a layer-shell HUD that shows recording (pink waveform) and transcribing (blue waveform) states.
 
 The HUD is enabled by default. Disable it with:
 

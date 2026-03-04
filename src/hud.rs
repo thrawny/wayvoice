@@ -1,31 +1,11 @@
-#[cfg(not(feature = "hud-ui"))]
-use log::warn;
-
-pub fn is_supported() -> bool {
-    cfg!(feature = "hud-ui")
-}
-
-#[cfg(feature = "hud-ui")]
 pub fn run_hud() {
     imp::run_hud();
 }
 
-#[cfg(not(feature = "hud-ui"))]
-pub fn run_hud() {
-    warn!("HUD UI not built. Re-run with: cargo run --features hud-ui -- hud");
-}
-
-#[cfg(feature = "hud-ui")]
 pub fn run_hud_preview() {
     imp::run_hud_preview();
 }
 
-#[cfg(not(feature = "hud-ui"))]
-pub fn run_hud_preview() {
-    warn!("HUD UI not built. Re-run with: just hud-preview");
-}
-
-#[cfg(feature = "hud-ui")]
 mod imp {
     use crate::ipc::socket_path;
     use gtk::cairo::Context;

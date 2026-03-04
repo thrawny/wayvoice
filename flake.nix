@@ -23,49 +23,44 @@
           pkgs = nixpkgs.legacyPackages.${system};
           inherit (pkgs) lib;
 
-          mkWayvoice =
-            { hud ? false }:
-            pkgs.rustPlatform.buildRustPackage {
-              pname = if hud then "wayvoice-hud" else "wayvoice";
-              inherit version;
+          wayvoice = pkgs.rustPlatform.buildRustPackage {
+            pname = "wayvoice";
+            inherit version;
 
-              src = lib.cleanSource ./.;
-              cargoLock.lockFile = ./Cargo.lock;
-              cargoBuildFeatures = lib.optionals hud [ "hud-ui" ];
+            src = lib.cleanSource ./.;
+            cargoLock.lockFile = ./Cargo.lock;
 
-              nativeBuildInputs = [
-                pkgs.pkg-config
-                pkgs.makeWrapper
-              ];
+            nativeBuildInputs = [
+              pkgs.pkg-config
+              pkgs.makeWrapper
+            ];
 
-              buildInputs = lib.optionals hud [
-                pkgs.gtk4
-                pkgs.gtk4-layer-shell
-              ];
+            buildInputs = [
+              pkgs.gtk4
+              pkgs.gtk4-layer-shell
+            ];
 
-              postInstall = ''
-                wrapProgram $out/bin/wayvoice \
-                  --prefix PATH : ${lib.makeBinPath [
-                    pkgs.pipewire
-                    pkgs.wtype
-                    pkgs.wl-clipboard
-                    pkgs.libnotify
-                  ]}
-              '';
+            postInstall = ''
+              wrapProgram $out/bin/wayvoice \
+                --prefix PATH : ${lib.makeBinPath [
+                  pkgs.pipewire
+                  pkgs.wtype
+                  pkgs.wl-clipboard
+                  pkgs.libnotify
+                ]}
+            '';
 
-              meta = {
-                description = "Voice-to-text daemon for Wayland";
-                license = lib.licenses.mit;
-                mainProgram = "wayvoice";
-                platforms = lib.platforms.linux;
-              };
+            meta = {
+              description = "Voice-to-text daemon for Wayland";
+              license = lib.licenses.mit;
+              mainProgram = "wayvoice";
+              platforms = lib.platforms.linux;
             };
+          };
 
-          wayvoice = mkWayvoice { };
-          wayvoice-hud = mkWayvoice { hud = true; };
         in
         {
-          inherit wayvoice wayvoice-hud;
+          inherit wayvoice;
           default = wayvoice;
         }
       );
@@ -80,10 +75,6 @@
           wayvoice = {
             type = "app";
             program = "${self.packages.${system}.wayvoice}/bin/wayvoice";
-          };
-          wayvoice-hud = {
-            type = "app";
-            program = "${self.packages.${system}.wayvoice-hud}/bin/wayvoice";
           };
         }
       );

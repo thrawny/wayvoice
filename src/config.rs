@@ -85,6 +85,7 @@ fn default_keywords() -> Vec<String> {
         "dotfiles",
         "Groq",
         "TOML",
+        "openclaw",
     ]
     .into_iter()
     .map(String::from)
@@ -125,6 +126,7 @@ fn default_replacements() -> HashMap<String, String> {
         ("c-lire", "cli"),
         ("tommel", "TOML"),
         ("in the N", "in the end"),
+        ("OpenClaude", "openclaw"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -161,7 +163,6 @@ pub fn load_config() -> Config {
     config
 }
 
-#[cfg(feature = "hud-ui")]
 pub fn parse_hex_color(hex: &str) -> Option<(f64, f64, f64)> {
     let hex = hex.strip_prefix('#')?;
     if hex.len() != 6 {

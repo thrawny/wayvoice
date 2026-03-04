@@ -8,7 +8,7 @@ mod oneshot;
 use clap::{Parser, Subcommand};
 use daemon::Daemon;
 use ipc::{run_server, send_command};
-use log::{debug, warn};
+use log::debug;
 use oneshot::run_once;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -103,15 +103,10 @@ async fn main() {
 }
 
 fn spawn_hud() {
-    if !hud::is_supported() {
-        warn!("HUD disabled: binary built without hud-ui feature");
-        return;
-    }
-
     let exe = match std::env::current_exe() {
         Ok(path) => path,
         Err(e) => {
-            warn!("Failed to resolve current executable for HUD spawn: {e}");
+            log::warn!("Failed to resolve current executable for HUD spawn: {e}");
             return;
         }
     };
@@ -124,6 +119,6 @@ fn spawn_hud() {
         .spawn()
     {
         Ok(_) => debug!("HUD process spawned"),
-        Err(e) => warn!("Failed to spawn HUD process: {e}"),
+        Err(e) => log::warn!("Failed to spawn HUD process: {e}"),
     }
 }
