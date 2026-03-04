@@ -86,6 +86,7 @@ fn default_keywords() -> Vec<String> {
         "Groq",
         "TOML",
         "openclaw",
+        "zmx"
     ]
     .into_iter()
     .map(String::from)
@@ -127,6 +128,7 @@ fn default_replacements() -> HashMap<String, String> {
         ("tommel", "TOML"),
         ("in the N", "in the end"),
         ("OpenClaude", "openclaw"),
+        ("cmx", "zmx"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
