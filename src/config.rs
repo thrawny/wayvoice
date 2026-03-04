@@ -20,6 +20,8 @@ pub struct Config {
     pub prompt: String,
     pub language: String,
     pub model: String,
+    pub keywords: Vec<String>,
+    pub min_words: usize,
     pub use_default_replacements: bool,
     pub replacements: HashMap<String, String>,
     pub hud_color: Option<String>,
@@ -41,6 +43,8 @@ impl Default for Config {
             prompt: String::new(),
             language: String::new(),
             model: String::new(),
+            keywords: default_keywords(),
+            min_words: 3,
             use_default_replacements: true,
             replacements: HashMap::new(),
             hud_color: None,
@@ -61,15 +65,30 @@ fn config_path() -> PathBuf {
         .join("wayvoice.toml")
 }
 
-fn default_prompt() -> String {
-    "I'm working on the NixOS configuration with Home Manager. \
-     Let me check the Neovim setup in LazyVim. \
-     Claude Code suggested refactoring the TypeScript and Rust code. \
-     The Hyprland keybindings need updating, same with the Niri config. \
-     I'll use tmux and Ghostty for the terminal session. \
-     The Kubernetes deployment needs the PostgreSQL migration to run first. \
-     Let me check the GitHub pull request and run the CI workflow."
-        .to_string()
+fn default_keywords() -> Vec<String> {
+    [
+        "Hyprland",
+        "Niri",
+        "Neovim",
+        "LazyVim",
+        "NixOS",
+        "Home Manager",
+        "Claude Code",
+        "CLAUDE.md",
+        "waybar",
+        "wtype",
+        "Ghostty",
+        "tailnet",
+        "pnpm",
+        "wayvoice",
+        "Wisprflow",
+        "dotfiles",
+        "Groq",
+        "TOML",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
 }
 
 fn default_replacements() -> HashMap<String, String> {
@@ -123,8 +142,13 @@ pub fn load_config() -> Config {
             Config::default()
         });
 
-    if config.prompt.is_empty() {
-        config.prompt = default_prompt();
+    if !config.keywords.is_empty() {
+        let kw = config.keywords.join(", ");
+        if config.prompt.is_empty() {
+            config.prompt = kw;
+        } else {
+            config.prompt = format!("{} {kw}", config.prompt);
+        }
     }
 
     if config.use_default_replacements {

@@ -1,4 +1,4 @@
-use crate::config::Provider;
+use crate::config::{Config, Provider};
 
 const WAV_HEADER_BYTES: usize = 44;
 /// ~0.5 sec at 16 kHz mono 16-bit — anything shorter is not intentional speech.
@@ -147,11 +147,24 @@ pub fn reject_before_transcribe(
 }
 
 pub fn reject_transcript(
-    provider: Provider,
+    config: &Config,
     transcript: &str,
     metrics: AudioMetrics,
 ) -> Option<&'static str> {
-    if provider != Provider::Groq {
+    let word_count = transcript.split_whitespace().count();
+    if config.min_words > 0 && word_count < config.min_words {
+        return Some("Transcript too short");
+    }
+
+    if !config.language.is_empty() {
+        let non_ascii = transcript.chars().filter(|c| !c.is_ascii()).count();
+        let total = transcript.chars().count();
+        if total > 0 && non_ascii * 10 > total {
+            return Some("Transcript language mismatch");
+        }
+    }
+
+    if config.provider != Provider::Groq {
         return None;
     }
 
@@ -212,6 +225,15 @@ fn is_common_hallucination(normalized: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn groq_config() -> Config {
+        Config {
+            provider: Provider::Groq,
+            language: "en".to_string(),
+            min_words: 0,
+            ..Config::default()
+        }
+    }
 
     fn wav_from_samples(samples: &[i16]) -> Vec<u8> {
         let data_len = (samples.len() * 2) as u32;
@@ -313,7 +335,7 @@ mod tests {
         let wav = wav_from_samples(&vec![500i16; 10000]);
         let m = analyze_audio(&wav);
         assert_eq!(
-            reject_transcript(Provider::Groq, "Thank you.", m),
+            reject_transcript(&groq_config(), "Thank you.", m),
             Some("No microphone input detected")
         );
     }
@@ -329,7 +351,7 @@ mod tests {
             "See you next time!",
         ] {
             assert_eq!(
-                reject_transcript(Provider::Groq, phrase, m),
+                reject_transcript(&groq_config(), phrase, m),
                 Some("No microphone input detected"),
                 "should reject: {phrase}"
             );

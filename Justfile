@@ -42,6 +42,10 @@ check:
 test:
     cargo test --release
 
+# Run keyword eval tests (requires GROQ_API_KEY)
+eval:
+    cargo test --release -- --ignored --nocapture
+
 # Format code
 fmt:
     cargo fmt

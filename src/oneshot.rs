@@ -90,7 +90,7 @@ pub async fn run_once(config: Config) {
     };
 
     debug!("raw: {text}");
-    if let Some(reason) = reject_transcript(config.provider, &text, metrics) {
+    if let Some(reason) = reject_transcript(&config, &text, metrics) {
         eprintln!("{reason}");
         std::process::exit(1);
     }

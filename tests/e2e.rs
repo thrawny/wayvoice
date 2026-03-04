@@ -15,6 +15,7 @@ fn fixture(name: &str) -> PathBuf {
 fn default_test_config() -> Config {
     Config {
         provider: Provider::Groq,
+        language: "en".to_string(),
         ..Config::default()
     }
 }
@@ -87,9 +88,128 @@ async fn silence_e2e_rejected() {
     // But also verify: if we bypass the guard and send to Groq,
     // the transcript rejection catches the hallucination
     let transcript = transcribe_audio(audio, &config).await.unwrap();
-    let post_guard = reject_transcript(config.provider, &transcript, metrics);
+    let post_guard = reject_transcript(&config, &transcript, metrics);
     assert!(
         post_guard.is_some(),
         "Groq hallucinated on silence and we didn't catch it: {transcript:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn silence_gibberish_transcription() {
+    if !has_groq_key() {
+        eprintln!("skipping: GROQ_API_KEY not set");
+        return;
+    }
+
+    let audio = std::fs::read(fixture("silence_gibberish.wav")).unwrap();
+    let metrics = analyze_audio(&audio);
+    eprintln!(
+        "metrics: mean_abs={:.1} max_abs={} samples={} too_short={} likely_silent={}",
+        metrics.mean_abs,
+        metrics.max_abs,
+        metrics.sample_count,
+        metrics.too_short,
+        metrics.likely_silent
+    );
+
+    let config = default_test_config();
+    let transcript = transcribe_audio(audio, &config).await.unwrap();
+    eprintln!("transcript: {transcript}");
+
+    let ascii_count = transcript.chars().filter(|c| c.is_ascii()).count();
+    let total = transcript.len().max(1);
+    eprintln!(
+        "ascii ratio: {ascii_count}/{total} = {:.2}",
+        ascii_count as f64 / total as f64
+    );
+
+    let rejection = reject_transcript(&config, &transcript, metrics);
+    eprintln!("rejection: {rejection:?}");
+}
+
+// ── Keyword eval tests (require GROQ_API_KEY, #[ignore]) ────────
+
+/// Expected domain terms in the keywords_test fixture.
+const EXPECTED_TERMS: &[&str] = &[
+    "Hyprland",
+    "Wisprflow",
+    "NixOS",
+    "LazyVim",
+    "Claude Code",
+    "wayvoice",
+    "TOML",
+    "Groq",
+];
+
+fn count_matched_terms(transcript: &str) -> Vec<&'static str> {
+    EXPECTED_TERMS
+        .iter()
+        .filter(|term| transcript.contains(**term))
+        .copied()
+        .collect()
+}
+
+fn print_eval(label: &str, transcript: &str, matched: &[&str]) {
+    eprintln!("── {label} ──");
+    eprintln!("  transcript: {transcript}");
+    eprintln!(
+        "  matched:    {}/{} {:?}",
+        matched.len(),
+        EXPECTED_TERMS.len(),
+        matched
+    );
+    eprintln!();
+}
+
+#[tokio::test]
+#[ignore]
+async fn keywords_eval() {
+    if !has_groq_key() {
+        eprintln!("skipping: GROQ_API_KEY not set");
+        return;
+    }
+
+    let audio = std::fs::read(fixture("keywords_test.wav")).unwrap();
+
+    // Without keywords — no prompt at all
+    let config_bare = Config {
+        provider: Provider::Groq,
+        prompt: String::new(),
+        keywords: vec![],
+        ..Config::default()
+    };
+    let without = transcribe_audio(audio.clone(), &config_bare).await.unwrap();
+    let matched_without = count_matched_terms(&without);
+    print_eval("No keywords", &without, &matched_without);
+
+    // With keywords — comma-separated list as prompt
+    let config_kw = {
+        let mut c = default_test_config();
+        c.prompt = c.keywords.join(", ");
+        c
+    };
+    let with = transcribe_audio(audio, &config_kw).await.unwrap();
+    let matched_with = count_matched_terms(&with);
+    print_eval("With keywords", &with, &matched_with);
+
+    eprintln!("── Summary ──");
+    eprintln!(
+        "  {}/{} No keywords",
+        matched_without.len(),
+        EXPECTED_TERMS.len()
+    );
+    eprintln!(
+        "  {}/{} With keywords",
+        matched_with.len(),
+        EXPECTED_TERMS.len()
+    );
+
+    assert!(
+        matched_with.len() >= matched_without.len(),
+        "Keywords should not make things worse: with={} without={}",
+        matched_with.len(),
+        matched_without.len(),
     );
 }

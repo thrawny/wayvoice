@@ -113,7 +113,7 @@ impl Daemon {
             Ok(text) => {
                 debug!("raw: {text}");
 
-                if let Some(reason) = reject_transcript(job.config.provider, &text, job.metrics) {
+                if let Some(reason) = reject_transcript(&job.config, &text, job.metrics) {
                     warn!("Discarded suspicious transcript: {text:?} ({reason})");
                     notify(reason, &job.config).await;
                 } else {
