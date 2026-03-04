@@ -41,7 +41,7 @@ impl Default for Config {
             openai_api_key: String::new(),
             groq_api_key: String::new(),
             prompt: String::new(),
-            language: String::new(),
+            language: "en".to_string(),
             model: String::new(),
             keywords: default_keywords(),
             min_words: 3,

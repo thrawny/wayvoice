@@ -5,10 +5,11 @@ const WAV_HEADER_BYTES: usize = 44;
 const MIN_PCM_BYTES: usize = 16000;
 /// Need at least this many samples before we trust the silence heuristic.
 const MIN_SILENCE_SAMPLES: u64 = 4000;
-/// Real microphone ambient noise in a quiet room is typically mean_abs 20–200.
-const SILENCE_MEAN_ABS_MAX: f64 = 150.0;
-/// Ambient peaks easily reach 500–2000 even in a quiet room.
-const SILENCE_MAX_ABS_MAX: i32 = 1500;
+/// Background noise without speech: mean_abs typically 100–1000.
+/// Quiet speech starts around mean_abs 1300.
+const SILENCE_MEAN_ABS_MAX: f64 = 1000.0;
+/// Background noise peaks under ~6000; speech peaks above 10000.
+const SILENCE_MAX_ABS_MAX: i32 = 6000;
 /// Check hallucination patterns for recordings up to ~1.5 sec.
 const SHORT_HALLUCINATION_PCM_BYTES: usize = 48000;
 
