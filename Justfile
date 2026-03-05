@@ -12,13 +12,12 @@ build:
 run:
     cargo run -- serve
 
-# Watch daemon in a zmx session (rebuild on changes)
-watch provider="groq" session="wayvoice":
-    zmx attach {{ session }} sh -lc 'RUST_LOG=debug VOICE_PROVIDER={{ provider }} watchexec -w src -e rs --restart -- cargo run -- serve'
-
-# Watch daemon without zmx (rebuild on changes)
-watch-raw provider="groq":
-    RUST_LOG=debug VOICE_PROVIDER={{ provider }} watchexec -w src -e rs --restart -- cargo run -- serve
+# Watch daemon with build-gated restart (old process stays alive on compile errors)
+watch provider="groq":
+    cargo build
+    zmx run wayvoice-build 'watchexec -w src -e rs --debounce 5000ms -- cargo build'
+    zmx run wayvoice 'RUST_LOG=debug VOICE_PROVIDER={{ provider }} watchexec --restart --debounce 3000ms -w target/debug/wayvoice -- ./target/debug/wayvoice serve'
+    zmx attach wayvoice
 
 # Show HUD preview without recording (for UI iteration)
 hud-preview:
