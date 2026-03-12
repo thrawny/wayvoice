@@ -1,18 +1,13 @@
+use crate::audio_signal::analyze_pcm_s16le;
+
 /// Compute RMS of raw s16le PCM samples, normalized to 0.0..=1.0.
 pub fn rms_level(pcm_s16le: &[u8]) -> f32 {
-    let sample_count = pcm_s16le.len() / 2;
-    if sample_count == 0 {
-        return 0.0;
-    }
+    analyze_pcm_s16le(pcm_s16le).normalized_rms()
+}
 
-    let mut sum_sq: u64 = 0;
-    for chunk in pcm_s16le.chunks_exact(2) {
-        let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as i64;
-        sum_sq += (sample * sample) as u64;
-    }
-
-    let rms = (sum_sq as f64 / sample_count as f64).sqrt();
-    (rms / 32767.0).min(1.0) as f32
+/// Compute a display-friendly audio level that ignores DC offset and isolated spikes.
+pub fn display_level(pcm_s16le: &[u8]) -> f32 {
+    analyze_pcm_s16le(pcm_s16le).normalized_display_level()
 }
 
 #[cfg(test)]
@@ -59,5 +54,26 @@ mod tests {
         let pcm = vec![0x00, 0x40, 0xFF];
         let level = rms_level(&pcm);
         assert!((level - 0.5).abs() < 0.01, "expected ~0.5, got {level}");
+    }
+
+    #[test]
+    fn display_level_ignores_dc_offset() {
+        let mut pcm = Vec::new();
+        for _ in 0..1600 {
+            pcm.extend_from_slice(&6200i16.to_le_bytes());
+        }
+
+        assert!(display_level(&pcm) < 0.001);
+    }
+
+    #[test]
+    fn display_level_still_tracks_voice_like_motion() {
+        let mut pcm = Vec::new();
+        for i in 0..1600 {
+            let sample: i16 = 6200 + if i % 20 < 10 { 1200 } else { -1200 };
+            pcm.extend_from_slice(&sample.to_le_bytes());
+        }
+
+        assert!(display_level(&pcm) > 0.03);
     }
 }

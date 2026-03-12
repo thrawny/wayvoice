@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 use wayvoice::audio_guard::{
     AudioMetrics, analyze_audio, reject_before_transcribe, reject_transcript, wrap_pcm_as_wav,
 };
-use wayvoice::audio_level::rms_level;
+use wayvoice::audio_level::display_level;
 use wayvoice::config::Config;
 use wayvoice::text::apply_replacements;
 
@@ -215,11 +215,16 @@ impl Daemon {
 
         let metrics = analyze_audio(&audio_data);
         debug!(
-            "audio signal: payload_bytes={} samples={} mean_abs={:.2} max_abs={} too_short={} likely_silent={}",
+            "audio signal: payload_bytes={} samples={} mean_abs={:.2} dc_offset={:.2} max_abs={} centered_mean_abs={:.2} centered_rms={:.2} centered_p90_abs={:.2} centered_zc_per_sec={:.2} too_short={} likely_silent={}",
             metrics.payload_bytes,
             metrics.sample_count,
             metrics.mean_abs,
+            metrics.dc_offset,
             metrics.max_abs,
+            metrics.centered_mean_abs,
+            metrics.centered_rms,
+            metrics.centered_p90_abs,
+            metrics.centered_zero_crossings_per_sec,
             metrics.too_short,
             metrics.likely_silent
         );
@@ -274,8 +279,8 @@ async fn read_pcm_stream(
             consumed += to_copy;
 
             if window_pos == WINDOW_BYTES {
-                let rms = rms_level(&window);
-                level.store(rms.to_bits(), Ordering::Relaxed);
+                let current_level = display_level(&window);
+                level.store(current_level.to_bits(), Ordering::Relaxed);
                 window_pos = 0;
             }
         }

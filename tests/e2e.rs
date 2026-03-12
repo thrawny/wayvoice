@@ -2,7 +2,8 @@ use std::path::PathBuf;
 use wayvoice::audio_guard::{
     analyze_audio, reject_before_transcribe, reject_transcript, wrap_pcm_as_wav,
 };
-use wayvoice::audio_level::rms_level;
+use wayvoice::audio_level::{display_level, rms_level};
+use wayvoice::audio_signal::pcm_payload;
 use wayvoice::config::{Config, Provider};
 use wayvoice::transcription::transcribe_audio;
 
@@ -70,6 +71,62 @@ fn wrap_pcm_as_wav_roundtrips_through_analyze() {
     assert!(!metrics.too_short);
     assert!(!metrics.likely_silent);
     assert_eq!(reject_before_transcribe(Provider::Groq, metrics), None);
+}
+
+#[test]
+fn ryzen_silence_rejected_by_audio_guard() {
+    let audio = std::fs::read(fixture("ryzen_silence_gibberish.wav")).unwrap();
+    let metrics = analyze_audio(&audio);
+
+    assert!(
+        metrics.likely_silent,
+        "ryzen silence should be detected as silent: dc_offset={:.1} centered_p90_abs={:.1} zc/s={:.1}",
+        metrics.dc_offset, metrics.centered_p90_abs, metrics.centered_zero_crossings_per_sec
+    );
+    assert_eq!(
+        reject_before_transcribe(Provider::Groq, metrics),
+        Some("No microphone input detected")
+    );
+}
+
+#[test]
+fn ryzen_speech_passes_audio_guard() {
+    let audio = std::fs::read(fixture("ryzen_speech.wav")).unwrap();
+    let metrics = analyze_audio(&audio);
+
+    assert!(!metrics.too_short, "ryzen speech flagged as too short");
+    assert!(
+        !metrics.likely_silent,
+        "ryzen speech flagged as silent: dc_offset={:.1} centered_p90_abs={:.1} zc/s={:.1}",
+        metrics.dc_offset, metrics.centered_p90_abs, metrics.centered_zero_crossings_per_sec
+    );
+    assert_eq!(reject_before_transcribe(Provider::Groq, metrics), None);
+}
+
+#[test]
+fn display_level_handles_ryzen_offset_better_than_raw_rms() {
+    let ryzen_silence = std::fs::read(fixture("ryzen_silence_gibberish.wav")).unwrap();
+    let ryzen_speech = std::fs::read(fixture("ryzen_speech.wav")).unwrap();
+
+    let silence_pcm = pcm_payload(&ryzen_silence);
+    let speech_pcm = pcm_payload(&ryzen_speech);
+
+    let silence_display = display_level(silence_pcm);
+    let speech_display = display_level(speech_pcm);
+    let silence_rms = rms_level(silence_pcm);
+
+    assert!(
+        silence_display < 0.02,
+        "ryzen silence display level should stay low, got {silence_display}"
+    );
+    assert!(
+        speech_display > silence_display * 2.0,
+        "speech display level should exceed silence: speech={speech_display} silence={silence_display}"
+    );
+    assert!(
+        silence_rms > silence_display * 10.0,
+        "raw RMS should remain much higher than the display level on biased silence: rms={silence_rms} display={silence_display}"
+    );
 }
 
 // ── Happy path: real speech must not be rejected ─────────────────

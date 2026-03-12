@@ -1,6 +1,6 @@
+use crate::audio_signal::{analyze_pcm_s16le, pcm_payload};
 use crate::config::{Config, Provider};
 
-const WAV_HEADER_BYTES: usize = 44;
 /// ~0.5 sec at 16 kHz mono 16-bit — anything shorter is not intentional speech.
 const MIN_PCM_BYTES: usize = 16000;
 /// Need at least this many samples before we trust the silence heuristic.
@@ -10,6 +10,12 @@ const MIN_SILENCE_SAMPLES: u64 = 4000;
 const SILENCE_MEAN_ABS_MAX: f64 = 1000.0;
 /// Background noise peaks under ~6000; speech peaks above 10000.
 const SILENCE_MAX_ABS_MAX: i32 = 6000;
+/// A large DC offset indicates a biased capture path rather than ambient room noise.
+const BIASED_CAPTURE_OFFSET_MIN: f64 = 1500.0;
+/// Flat offset-heavy junk stays low even at the 90th percentile after centering.
+const BIASED_CAPTURE_CENTERED_P90_MAX: f64 = 400.0;
+/// Speech crosses the centered zero line often; flat junk barely does.
+const BIASED_CAPTURE_CENTERED_ZC_PER_SEC_MAX: f64 = 400.0;
 /// Check hallucination patterns for recordings up to ~1.5 sec.
 const SHORT_HALLUCINATION_PCM_BYTES: usize = 48000;
 
@@ -18,97 +24,43 @@ pub struct AudioMetrics {
     pub payload_bytes: usize,
     pub sample_count: u64,
     pub mean_abs: f64,
+    pub dc_offset: f64,
     pub max_abs: i32,
+    pub centered_mean_abs: f64,
+    pub centered_rms: f64,
+    pub centered_p90_abs: f64,
+    pub centered_zero_crossings_per_sec: f64,
     pub too_short: bool,
     pub likely_silent: bool,
 }
 
 pub fn analyze_audio(audio_data: &[u8]) -> AudioMetrics {
     let payload = pcm_payload(audio_data);
-
-    let mut sample_count = 0u64;
-    let mut sum_abs = 0u64;
-    let mut max_abs = 0i32;
-
-    for chunk in payload.chunks_exact(2) {
-        let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as i32;
-        let abs = sample.abs();
-        sample_count += 1;
-        sum_abs += abs as u64;
-        max_abs = max_abs.max(abs);
-    }
-
-    let mean_abs = if sample_count == 0 {
-        0.0
-    } else {
-        sum_abs as f64 / sample_count as f64
-    };
+    let signal = analyze_pcm_s16le(payload);
 
     let too_short = payload.len() < MIN_PCM_BYTES;
-    let likely_silent = sample_count >= MIN_SILENCE_SAMPLES
-        && mean_abs <= SILENCE_MEAN_ABS_MAX
-        && max_abs <= SILENCE_MAX_ABS_MAX;
+    let legacy_silence = signal.sample_count >= MIN_SILENCE_SAMPLES
+        && signal.mean_abs <= SILENCE_MEAN_ABS_MAX
+        && signal.max_abs <= SILENCE_MAX_ABS_MAX;
+    let biased_capture_silence = signal.sample_count >= MIN_SILENCE_SAMPLES
+        && signal.mean.abs() >= BIASED_CAPTURE_OFFSET_MIN
+        && signal.centered_p90_abs <= BIASED_CAPTURE_CENTERED_P90_MAX
+        && signal.centered_zero_crossings_per_sec() <= BIASED_CAPTURE_CENTERED_ZC_PER_SEC_MAX;
+    let likely_silent = legacy_silence || biased_capture_silence;
 
     AudioMetrics {
         payload_bytes: payload.len(),
-        sample_count,
-        mean_abs,
-        max_abs,
+        sample_count: signal.sample_count,
+        mean_abs: signal.mean_abs,
+        dc_offset: signal.mean,
+        max_abs: signal.max_abs,
+        centered_mean_abs: signal.centered_mean_abs,
+        centered_rms: signal.centered_rms,
+        centered_p90_abs: signal.centered_p90_abs,
+        centered_zero_crossings_per_sec: signal.centered_zero_crossings_per_sec(),
         too_short,
         likely_silent,
     }
-}
-
-fn pcm_payload(audio_data: &[u8]) -> &[u8] {
-    if audio_data.len() < 12 || &audio_data[0..4] != b"RIFF" || &audio_data[8..12] != b"WAVE" {
-        return audio_data.get(WAV_HEADER_BYTES..).unwrap_or(&[]);
-    }
-
-    let mut offset = 12usize;
-    while offset + 8 <= audio_data.len() {
-        let chunk_id = &audio_data[offset..offset + 4];
-        let chunk_size = u32::from_le_bytes([
-            audio_data[offset + 4],
-            audio_data[offset + 5],
-            audio_data[offset + 6],
-            audio_data[offset + 7],
-        ]) as usize;
-
-        let start = offset + 8;
-        if start > audio_data.len() {
-            return audio_data.get(WAV_HEADER_BYTES..).unwrap_or(&[]);
-        }
-
-        if chunk_id == b"data" {
-            if chunk_size == 0 {
-                return &audio_data[start..];
-            }
-
-            let Some(end) = start.checked_add(chunk_size) else {
-                return &audio_data[start..];
-            };
-
-            return if end <= audio_data.len() {
-                &audio_data[start..end]
-            } else {
-                &audio_data[start..]
-            };
-        }
-
-        let Some(next) = start.checked_add(chunk_size) else {
-            break;
-        };
-        offset = if chunk_size % 2 == 1 {
-            match next.checked_add(1) {
-                Some(v) => v,
-                None => break,
-            }
-        } else {
-            next
-        };
-    }
-
-    audio_data.get(WAV_HEADER_BYTES..).unwrap_or(&[])
 }
 
 /// Wrap raw s16le PCM data in a valid WAV container (16 kHz, mono, 16-bit).
@@ -322,6 +274,29 @@ mod tests {
         // Simulate speech-level signal (mean_abs ~1500, max_abs = 1500)
         let samples: Vec<i16> = (0..16000)
             .map(|i| if i % 20 < 10 { 1500 } else { -1500 })
+            .collect();
+        let wav = wav_from_samples(&samples);
+        let m = analyze_audio(&wav);
+        assert!(!m.too_short);
+        assert!(!m.likely_silent);
+        assert_eq!(reject_before_transcribe(Provider::Groq, m), None);
+    }
+
+    #[test]
+    fn detects_flat_biased_capture_as_silence() {
+        let wav = wav_from_samples(&vec![6200i16; 16000]);
+        let m = analyze_audio(&wav);
+        assert!(
+            m.likely_silent,
+            "biased capture should be detected as silent: dc_offset={:.1} centered_p90_abs={:.1} zc/s={:.1}",
+            m.dc_offset, m.centered_p90_abs, m.centered_zero_crossings_per_sec
+        );
+    }
+
+    #[test]
+    fn does_not_flag_offset_voice_like_signal() {
+        let samples: Vec<i16> = (0..16000)
+            .map(|i| 6200 + if i % 20 < 10 { 1200 } else { -1200 })
             .collect();
         let wav = wav_from_samples(&samples);
         let m = analyze_audio(&wav);
