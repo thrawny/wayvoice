@@ -14,8 +14,8 @@ const SILENCE_MAX_ABS_MAX: i32 = 6000;
 const BIASED_CAPTURE_OFFSET_MIN: f64 = 1500.0;
 /// Flat offset-heavy junk stays low even at the 90th percentile after centering.
 const BIASED_CAPTURE_CENTERED_P90_MAX: f64 = 400.0;
-/// Speech crosses the centered zero line often; flat junk barely does.
-const BIASED_CAPTURE_CENTERED_ZC_PER_SEC_MAX: f64 = 400.0;
+/// Biased silence can still flutter a bit; real speech is still much higher.
+const BIASED_CAPTURE_CENTERED_ZC_PER_SEC_MAX: f64 = 600.0;
 /// Check hallucination patterns for recordings up to ~1.5 sec.
 const SHORT_HALLUCINATION_PCM_BYTES: usize = 48000;
 

@@ -30,6 +30,21 @@ macro_rules! require_groq {
     };
 }
 
+fn assert_ryzen_silence_rejected(name: &str) {
+    let audio = std::fs::read(fixture(name)).unwrap();
+    let metrics = analyze_audio(&audio);
+
+    assert!(
+        metrics.likely_silent,
+        "{name} should be detected as silent: dc_offset={:.1} centered_p90_abs={:.1} zc/s={:.1}",
+        metrics.dc_offset, metrics.centered_p90_abs, metrics.centered_zero_crossings_per_sec
+    );
+    assert_eq!(
+        reject_before_transcribe(Provider::Groq, metrics),
+        Some("No microphone input detected")
+    );
+}
+
 // ── Offline tests (no API calls) ──────────────────────────────────
 
 #[test]
@@ -75,18 +90,17 @@ fn wrap_pcm_as_wav_roundtrips_through_analyze() {
 
 #[test]
 fn ryzen_silence_rejected_by_audio_guard() {
-    let audio = std::fs::read(fixture("ryzen_silence_gibberish.wav")).unwrap();
-    let metrics = analyze_audio(&audio);
+    assert_ryzen_silence_rejected("ryzen_silence_gibberish.wav");
+}
 
-    assert!(
-        metrics.likely_silent,
-        "ryzen silence should be detected as silent: dc_offset={:.1} centered_p90_abs={:.1} zc/s={:.1}",
-        metrics.dc_offset, metrics.centered_p90_abs, metrics.centered_zero_crossings_per_sec
-    );
-    assert_eq!(
-        reject_before_transcribe(Provider::Groq, metrics),
-        Some("No microphone input detected")
-    );
+#[test]
+fn ryzen_silence_edge_rejected_by_audio_guard() {
+    assert_ryzen_silence_rejected("ryzen_silence_edge.wav");
+}
+
+#[test]
+fn ryzen_silence_latest_rejected_by_audio_guard() {
+    assert_ryzen_silence_rejected("ryzen_silence_rejected.wav");
 }
 
 #[test]
@@ -106,12 +120,18 @@ fn ryzen_speech_passes_audio_guard() {
 #[test]
 fn display_level_handles_ryzen_offset_better_than_raw_rms() {
     let ryzen_silence = std::fs::read(fixture("ryzen_silence_gibberish.wav")).unwrap();
+    let ryzen_silence_edge = std::fs::read(fixture("ryzen_silence_edge.wav")).unwrap();
+    let ryzen_silence_latest = std::fs::read(fixture("ryzen_silence_rejected.wav")).unwrap();
     let ryzen_speech = std::fs::read(fixture("ryzen_speech.wav")).unwrap();
 
     let silence_pcm = pcm_payload(&ryzen_silence);
+    let silence_edge_pcm = pcm_payload(&ryzen_silence_edge);
+    let silence_latest_pcm = pcm_payload(&ryzen_silence_latest);
     let speech_pcm = pcm_payload(&ryzen_speech);
 
     let silence_display = display_level(silence_pcm);
+    let silence_edge_display = display_level(silence_edge_pcm);
+    let silence_latest_display = display_level(silence_latest_pcm);
     let speech_display = display_level(speech_pcm);
     let silence_rms = rms_level(silence_pcm);
 
@@ -120,8 +140,24 @@ fn display_level_handles_ryzen_offset_better_than_raw_rms() {
         "ryzen silence display level should stay low, got {silence_display}"
     );
     assert!(
+        silence_edge_display < 0.02,
+        "ryzen silence edge display level should stay low, got {silence_edge_display}"
+    );
+    assert!(
+        silence_latest_display < 0.02,
+        "ryzen latest silence display level should stay low, got {silence_latest_display}"
+    );
+    assert!(
         speech_display > silence_display * 2.0,
         "speech display level should exceed silence: speech={speech_display} silence={silence_display}"
+    );
+    assert!(
+        speech_display > silence_edge_display * 2.0,
+        "speech display level should exceed edge silence: speech={speech_display} silence={silence_edge_display}"
+    );
+    assert!(
+        speech_display > silence_latest_display * 2.0,
+        "speech display level should exceed latest silence: speech={speech_display} silence={silence_latest_display}"
     );
     assert!(
         silence_rms > silence_display * 10.0,
