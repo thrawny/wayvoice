@@ -1,5 +1,7 @@
 # wayvoice task runner
 
+_build_stamp := "target/debug/wayvoice-built.stamp"
+
 # Default recipe
 default:
     @just --list
@@ -15,8 +17,9 @@ run:
 # Watch daemon with build-gated restart (old process stays alive on compile errors)
 watch provider="groq":
     cargo build
-    zmx run wayvoice-build 'watchexec -w src -e rs --debounce 5000ms -- cargo build'
-    zmx run wayvoice 'RUST_LOG=debug VOICE_PROVIDER={{ provider }} watchexec --restart --debounce 3000ms -w target/debug/wayvoice -- ./target/debug/wayvoice serve'
+    touch {{ _build_stamp }}
+    zmx run wayvoice-build "watchexec -w src -w Cargo.toml -e rs --debounce 5s --on-busy-update queue -- 'cargo build && touch {{ _build_stamp }}'"
+    zmx run wayvoice 'RUST_LOG=debug VOICE_PROVIDER={{ provider }} watchexec --restart --debounce 250ms -w {{ _build_stamp }} -- ./target/debug/wayvoice serve'
     zmx attach wayvoice
 
 # Show HUD preview without recording (for UI iteration)
