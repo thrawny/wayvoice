@@ -35,10 +35,11 @@ clippy:
     cargo clippy --fix --allow-dirty --allow-staged --release
 
 # Run all post-change checks
-check:
-    just fmt
+check: fmt _clippy-strict test
+
+# Clippy with denied warnings (for CI/check)
+_clippy-strict:
     cargo clippy -- -D warnings
-    just test
 
 # Run tests
 test:
