@@ -3,7 +3,12 @@ use std::collections::HashMap;
 pub fn apply_replacements(text: &str, replacements: &HashMap<String, String>) -> String {
     let mut result = text.to_string();
 
-    for (from, to) in replacements {
+    for (raw_key, to) in replacements {
+        let (substring_mode, from) = match raw_key.strip_prefix('~') {
+            Some(rest) => (true, rest),
+            None => (false, raw_key.as_str()),
+        };
+
         if from.is_empty() {
             continue;
         }
@@ -22,7 +27,7 @@ pub fn apply_replacements(text: &str, replacements: &HashMap<String, String>) ->
                 break;
             }
 
-            if is_word_boundary_match(&result, start, end) {
+            if substring_mode || is_word_boundary_match(&result, start, end) {
                 result.replace_range(start..end, to);
                 i = start + to.len();
             } else {
@@ -79,6 +84,24 @@ mod tests {
 
         let out = apply_replacements("jus justt", &replacements);
         assert_eq!(out, "just just");
+    }
+
+    #[test]
+    fn substring_mode_replaces_inside_words() {
+        let mut replacements = HashMap::new();
+        replacements.insert("~mpm".to_string(), "npm".to_string());
+
+        let out = apply_replacements("mpmrc", &replacements);
+        assert_eq!(out, "npmrc");
+    }
+
+    #[test]
+    fn substring_mode_replaces_standalone_too() {
+        let mut replacements = HashMap::new();
+        replacements.insert("~mpm".to_string(), "npm".to_string());
+
+        let out = apply_replacements("use mpm install", &replacements);
+        assert_eq!(out, "use npm install");
     }
 
     #[test]
