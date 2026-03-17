@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use toml_edit::{DocumentMut, Item, Table, value};
+use toml_edit::{Array, DocumentMut, Item, Table, value};
 
 #[derive(Debug, Default, Deserialize, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -23,6 +23,7 @@ pub struct Config {
     pub language: String,
     pub model: String,
     pub keywords: Vec<String>,
+    pub extra_keywords: Vec<String>,
     pub min_words: usize,
     pub use_default_replacements: bool,
     pub replacements: HashMap<String, String>,
@@ -46,6 +47,7 @@ impl Default for Config {
             language: "en".to_string(),
             model: String::new(),
             keywords: default_keywords(),
+            extra_keywords: Vec::new(),
             min_words: 3,
             use_default_replacements: true,
             replacements: HashMap::new(),
@@ -64,7 +66,9 @@ impl Default for Config {
 #[derive(Debug)]
 pub enum ConfigWriteError {
     EmptyReplacementKey,
+    EmptyKeyword,
     InvalidReplacementsTable,
+    InvalidExtraKeywordsArray,
     ParseToml(toml_edit::TomlError),
     ReadConfig(std::io::Error),
     WriteConfig(std::io::Error),
@@ -74,8 +78,12 @@ impl fmt::Display for ConfigWriteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyReplacementKey => write!(f, "replacement key cannot be empty"),
+            Self::EmptyKeyword => write!(f, "keyword cannot be empty"),
             Self::InvalidReplacementsTable => {
                 write!(f, "`replacements` exists but is not a TOML table")
+            }
+            Self::InvalidExtraKeywordsArray => {
+                write!(f, "`extra_keywords` exists but is not a TOML array")
             }
             Self::ParseToml(err) => write!(f, "failed to parse config TOML: {err}"),
             Self::ReadConfig(err) => write!(f, "failed to read config file: {err}"),
@@ -179,24 +187,35 @@ fn default_replacements() -> HashMap<String, String> {
 }
 
 pub fn try_load_config() -> Result<Config, config::ConfigError> {
+    try_load_config_at_path(&config_path())
+}
+
+fn try_load_config_at_path(path: &Path) -> Result<Config, config::ConfigError> {
     config::Config::builder()
-        .add_source(config::File::from(config_path()).required(false))
+        .add_source(config::File::from(path).required(false))
         .add_source(config::Environment::with_prefix("VOICE"))
         .build()
         .and_then(|c| c.try_deserialize())
+        .map(finalize_config)
 }
 
 pub fn load_config() -> Config {
-    let config = try_load_config().unwrap_or_else(|e| {
+    try_load_config().unwrap_or_else(|e| {
         eprintln!("Config error: {e}");
         Config::default()
-    });
-    finalize_config(config)
+    })
 }
 
 fn finalize_config(mut config: Config) -> Config {
-    if !config.keywords.is_empty() {
-        let kw = config.keywords.join(", ");
+    let keywords = config
+        .keywords
+        .iter()
+        .chain(config.extra_keywords.iter())
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+
+    if !keywords.is_empty() {
+        let kw = keywords.join(", ");
         if config.prompt.is_empty() {
             config.prompt = kw;
         } else {
@@ -220,6 +239,12 @@ pub fn upsert_replacement(from: &str, to: &str) -> Result<PathBuf, ConfigWriteEr
     Ok(path)
 }
 
+pub fn append_keyword(keyword: &str) -> Result<PathBuf, ConfigWriteError> {
+    let path = config_path();
+    append_keyword_at_path(&path, keyword)?;
+    Ok(path)
+}
+
 fn upsert_replacement_at_path(path: &Path, from: &str, to: &str) -> Result<(), ConfigWriteError> {
     let key = from.trim();
     if key.is_empty() {
@@ -228,12 +253,22 @@ fn upsert_replacement_at_path(path: &Path, from: &str, to: &str) -> Result<(), C
 
     let mut doc = load_config_document(path)?;
     ensure_replacements_table(&mut doc)?.insert(key, value(to));
+    save_config_document(path, doc)
+}
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(ConfigWriteError::WriteConfig)?;
+fn append_keyword_at_path(path: &Path, keyword: &str) -> Result<(), ConfigWriteError> {
+    let keyword = keyword.trim();
+    if keyword.is_empty() {
+        return Err(ConfigWriteError::EmptyKeyword);
     }
-    std::fs::write(path, doc.to_string()).map_err(ConfigWriteError::WriteConfig)?;
-    Ok(())
+
+    let mut doc = load_config_document(path)?;
+    let keywords = ensure_extra_keywords_array(&mut doc)?;
+    if !keywords.iter().any(|value| value.as_str() == Some(keyword)) {
+        keywords.push(keyword);
+    }
+
+    save_config_document(path, doc)
 }
 
 fn load_config_document(path: &Path) -> Result<DocumentMut, ConfigWriteError> {
@@ -252,6 +287,14 @@ fn load_config_document(path: &Path) -> Result<DocumentMut, ConfigWriteError> {
     }
 }
 
+fn save_config_document(path: &Path, doc: DocumentMut) -> Result<(), ConfigWriteError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(ConfigWriteError::WriteConfig)?;
+    }
+    std::fs::write(path, doc.to_string()).map_err(ConfigWriteError::WriteConfig)?;
+    Ok(())
+}
+
 fn ensure_replacements_table(doc: &mut DocumentMut) -> Result<&mut Table, ConfigWriteError> {
     if !doc.contains_key("replacements") {
         doc["replacements"] = Item::Table(Table::new());
@@ -260,6 +303,16 @@ fn ensure_replacements_table(doc: &mut DocumentMut) -> Result<&mut Table, Config
     doc["replacements"]
         .as_table_mut()
         .ok_or(ConfigWriteError::InvalidReplacementsTable)
+}
+
+fn ensure_extra_keywords_array(doc: &mut DocumentMut) -> Result<&mut Array, ConfigWriteError> {
+    if !doc.contains_key("extra_keywords") {
+        doc["extra_keywords"] = value(Array::new());
+    }
+
+    doc["extra_keywords"]
+        .as_array_mut()
+        .ok_or(ConfigWriteError::InvalidExtraKeywordsArray)
 }
 
 pub fn parse_hex_color(hex: &str) -> Option<(f64, f64, f64)> {
@@ -275,9 +328,13 @@ pub fn parse_hex_color(hex: &str) -> Option<(f64, f64, f64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfigWriteError, config_path, upsert_replacement_at_path};
+    use super::{
+        ConfigWriteError, append_keyword_at_path, config_path, finalize_config,
+        try_load_config_at_path, upsert_replacement_at_path,
+    };
+    use std::collections::HashMap;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use toml_edit::DocumentMut;
+    use toml_edit::{DocumentMut, Value};
 
     fn temp_config_path(test_name: &str) -> std::path::PathBuf {
         let unique = SystemTime::now()
@@ -336,6 +393,122 @@ mod tests {
 
         let err = upsert_replacement_at_path(&path, "ghosty", "Ghostty").unwrap_err();
         assert!(matches!(err, ConfigWriteError::InvalidReplacementsTable));
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn creates_extra_keywords_array_in_new_config() {
+        let path = temp_config_path("keyword-create");
+
+        append_keyword_at_path(&path, "Zen Browser").unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let doc = contents.parse::<DocumentMut>().unwrap();
+        assert_eq!(doc["extra_keywords"][0].as_str(), Some("Zen Browser"));
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn preserves_existing_config_when_adding_keyword() {
+        let path = temp_config_path("keyword-preserve");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "provider = \"groq\"\n# keep this comment\n").unwrap();
+
+        append_keyword_at_path(&path, "Zen Browser").unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("provider = \"groq\""));
+        assert!(contents.contains("# keep this comment"));
+        let doc = contents.parse::<DocumentMut>().unwrap();
+        assert_eq!(doc["extra_keywords"][0].as_str(), Some("Zen Browser"));
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn does_not_duplicate_existing_keyword() {
+        let path = temp_config_path("keyword-dedupe");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "extra_keywords = [\"Zen Browser\"]\n").unwrap();
+
+        append_keyword_at_path(&path, "Zen Browser").unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let doc = contents.parse::<DocumentMut>().unwrap();
+        let keywords = doc["extra_keywords"].as_array().unwrap();
+        assert_eq!(keywords.len(), 1);
+        assert_eq!(keywords.get(0).and_then(Value::as_str), Some("Zen Browser"));
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn rejects_non_array_extra_keywords_section() {
+        let path = temp_config_path("keyword-reject");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "extra_keywords = \"oops\"\n").unwrap();
+
+        let err = append_keyword_at_path(&path, "Zen Browser").unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidExtraKeywordsArray));
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn extra_keywords_are_appended_to_prompt() {
+        let config = finalize_config(super::Config {
+            prompt: "custom".to_string(),
+            extra_keywords: vec!["Zen Browser".to_string()],
+            ..super::Config::default()
+        });
+
+        assert!(config.prompt.contains("custom"));
+        assert!(config.prompt.contains("Zen Browser"));
+    }
+
+    #[test]
+    fn default_replacements_are_merged_with_custom_replacements() {
+        let config = finalize_config(super::Config {
+            replacements: HashMap::from([("ghosty".to_string(), "Ghost".to_string())]),
+            ..super::Config::default()
+        });
+
+        assert_eq!(
+            config.replacements.get("cmx").map(String::as_str),
+            Some("zmx")
+        );
+        assert_eq!(
+            config.replacements.get("ghosty").map(String::as_str),
+            Some("Ghost")
+        );
+    }
+
+    #[test]
+    fn try_load_config_merges_default_replacements() {
+        let path = temp_config_path("load-merge");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "[replacements]\n\"ghosty\" = \"Ghost\"\n\"Wavois\" = \"wayvoice\"\n",
+        )
+        .unwrap();
+
+        let config = try_load_config_at_path(&path).unwrap();
+
+        assert_eq!(
+            config.replacements.get("cmx").map(String::as_str),
+            Some("zmx")
+        );
+        assert_eq!(
+            config.replacements.get("ghosty").map(String::as_str),
+            Some("Ghost")
+        );
+        assert_eq!(
+            config.replacements.get("Wavois").map(String::as_str),
+            Some("wayvoice")
+        );
 
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }

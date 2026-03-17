@@ -108,12 +108,17 @@ language = "en"
 # export GROQ_API_KEY=...
 # export OPENAI_API_KEY=...
 
-[replacements]
-"hyperland" = "Hyprland"
+# Extra prompt keywords appended after the built-in defaults
+# extra_keywords = ["Zen Browser"]
 
 # HUD recording color (hex, default: #fc618d)
 # hud_color = "#fc618d"
+
+[replacements]
+"hyperland" = "Hyprland"
 ```
+
+Keywords bias the transcription model upstream via the API prompt. Replacements rewrite the transcript downstream after transcription.
 
 Replacements are **additive by default**: your `[replacements]` are merged on top of built-in defaults.
 
@@ -126,6 +131,7 @@ use_default_replacements = false
 You can also add replacements from the CLI:
 
 ```bash
+wayvoice keyword add "Zen Browser"
 wayvoice replace add "hyperland" "Hyprland"
 wayvoice replace add --substring "mpm" "npm"
 ```

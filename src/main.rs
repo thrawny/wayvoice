@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
-use wayvoice::config::{config_path, load_config, try_load_config, upsert_replacement};
+use wayvoice::config::{
+    append_keyword, config_path, load_config, try_load_config, upsert_replacement,
+};
 
 #[derive(Parser)]
 #[command(name = "wayvoice", about = "Voice-to-text for Wayland")]
@@ -36,6 +38,11 @@ enum Commands {
     Status,
     /// One-shot: record until Enter, transcribe, print to stdout
     Once,
+    /// Manage prompt keywords in the user config
+    Keyword {
+        #[command(subcommand)]
+        command: KeywordCommands,
+    },
     /// Manage text replacements in the user config
     Replace {
         #[command(subcommand)]
@@ -45,6 +52,15 @@ enum Commands {
     Hud,
     /// Show HUD in preview mode without daemon state
     HudPreview,
+}
+
+#[derive(Subcommand)]
+enum KeywordCommands {
+    /// Add a keyword to the transcription prompt in ~/.config/wayvoice/config.toml
+    Add {
+        /// Keyword or phrase to bias transcription toward
+        keyword: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -69,6 +85,7 @@ async fn main() {
     match cli.command {
         Commands::Serve => {
             let config = load_config();
+            debug!("merged replacements: {:?}", config.replacements);
 
             if config.hud {
                 spawn_hud();
@@ -115,6 +132,17 @@ async fn main() {
             let config = load_config();
             run_once(config).await;
         }
+        Commands::Keyword { command } => match command {
+            KeywordCommands::Add { keyword } => match append_keyword(&keyword) {
+                Ok(path) => {
+                    println!("Saved keyword \"{keyword}\" in {}", path.display());
+                }
+                Err(err) => {
+                    eprintln!("Failed to update keyword: {err}");
+                    std::process::exit(1);
+                }
+            },
+        },
         Commands::Replace { command } => match command {
             ReplaceCommands::Add {
                 substring,
