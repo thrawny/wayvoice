@@ -23,7 +23,7 @@ mod imp {
     use std::rc::Rc;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
-    use wayvoice::config::{load_config, parse_hex_color};
+    use wayvoice::config::{load_config, parse_hex_color, try_load_config};
 
     const HUD_APP_ID_DAEMON: &str = "com.thrawny.wayvoice.hud";
     const HUD_APP_ID_PREVIEW: &str = "com.thrawny.wayvoice.hud.preview";
@@ -31,7 +31,9 @@ mod imp {
     const HUD_HEIGHT: i32 = 72;
     const STATUS_POLL_MS: u64 = 50;
     const WAVE_FRAME_MS: u64 = 33;
+    const CONFIG_POLL_MS: u64 = 500;
     const LEVEL_LERP_ALPHA: f32 = 0.3;
+    const DEFAULT_REC_COLOR: (f64, f64, f64) = (0.99, 0.38, 0.55);
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum HudMode {
@@ -123,11 +125,15 @@ mod imp {
         root.append(&wave);
         window.set_child(Some(&root));
 
-        let rec_color = load_config()
-            .hud_color
-            .as_deref()
-            .and_then(parse_hex_color)
-            .unwrap_or((0.99, 0.38, 0.55));
+        let initial_config = load_config();
+        let rec_color = Rc::new(Cell::new(
+            initial_config
+                .hud_color
+                .as_deref()
+                .and_then(parse_hex_color)
+                .unwrap_or(DEFAULT_REC_COLOR),
+        ));
+        let hud_enabled = Rc::new(Cell::new(initial_config.hud));
 
         let phase = Rc::new(Cell::new(0.0));
         let hud_state = Rc::new(RefCell::new(match mode {
@@ -141,6 +147,7 @@ mod imp {
             let phase = phase.clone();
             let hud_state = hud_state.clone();
             let display_level = display_level.clone();
+            let rec_color = rec_color.clone();
             wave.set_draw_func(move |_, cr, width, height| {
                 draw_wave(
                     cr,
@@ -148,9 +155,27 @@ mod imp {
                     height,
                     phase.get(),
                     *hud_state.borrow(),
-                    rec_color,
+                    rec_color.get(),
                     display_level.get() as f64,
                 );
+            });
+        }
+
+        {
+            let rec_color = rec_color.clone();
+            let hud_enabled = hud_enabled.clone();
+            glib::timeout_add_local(Duration::from_millis(CONFIG_POLL_MS), move || {
+                if let Ok(config) = try_load_config() {
+                    hud_enabled.set(config.hud);
+                    rec_color.set(
+                        config
+                            .hud_color
+                            .as_deref()
+                            .and_then(parse_hex_color)
+                            .unwrap_or(DEFAULT_REC_COLOR),
+                    );
+                }
+                ControlFlow::Continue
             });
         }
 
@@ -179,7 +204,15 @@ mod imp {
                 let poll_window = window.clone();
                 let hud_state = hud_state.clone();
                 let audio_level = audio_level.clone();
+                let hud_enabled = hud_enabled.clone();
                 glib::timeout_add_local(Duration::from_millis(STATUS_POLL_MS), move || {
+                    if !hud_enabled.get() {
+                        *hud_state.borrow_mut() = HudState::Hidden;
+                        audio_level.set(0.0);
+                        poll_window.hide();
+                        return ControlFlow::Continue;
+                    }
+
                     let snapshot = match status_snapshot.lock() {
                         Ok(guard) => *guard,
                         Err(_) => StatusSnapshot {

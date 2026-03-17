@@ -73,6 +73,17 @@ impl Daemon {
         f32::from_bits(self.audio_level.load(Ordering::Relaxed))
     }
 
+    pub fn reload_config(&mut self, config: Config) -> bool {
+        if self.config == config {
+            return false;
+        }
+
+        let should_spawn_hud = !self.config.hud && config.hud;
+        self.config = config;
+        debug!("runtime config reloaded");
+        should_spawn_hud
+    }
+
     pub async fn toggle(&mut self) -> ToggleResult {
         match self.state {
             State::Idle => {
@@ -287,4 +298,38 @@ async fn read_pcm_stream(
     }
 
     level.store(0.0f32.to_bits(), Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Daemon;
+    use wayvoice::config::Config;
+
+    #[test]
+    fn reload_config_updates_runtime_settings() {
+        let mut initial = Config::default();
+        initial.hud = false;
+
+        let mut daemon = Daemon::new(initial.clone());
+        let mut updated = initial.clone();
+        updated.notify_send = true;
+        updated
+            .replacements
+            .insert("hyperland".to_string(), "Hyprland".to_string());
+
+        assert!(!daemon.reload_config(updated.clone()));
+        assert_eq!(daemon.config, updated);
+    }
+
+    #[test]
+    fn reload_config_requests_hud_spawn_when_hud_becomes_enabled() {
+        let mut initial = Config::default();
+        initial.hud = false;
+
+        let mut daemon = Daemon::new(initial.clone());
+        let mut updated = initial;
+        updated.hud = true;
+
+        assert!(daemon.reload_config(updated));
+    }
 }

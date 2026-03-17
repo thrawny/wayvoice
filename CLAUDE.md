@@ -31,5 +31,5 @@ wayvoice is a Wayland voice-to-text daemon that records audio, transcribes with 
 ## 5) Quick project facts
 
 - Binary subcommands: `serve`, `toggle`, `cancel`, `status`, `once`
-- Config path: `~/.config/wayvoice.toml` (dont read it directly, may contain secrets)
+- Config path: `~/.config/wayvoice/config.toml` (dont read it directly, may contain secrets)
 - Watch session name convention: `wayvoice`

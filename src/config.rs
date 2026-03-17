@@ -1,7 +1,9 @@
 use log::debug;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fmt;
+use std::path::{Path, PathBuf};
+use toml_edit::{DocumentMut, Item, Table, value};
 
 #[derive(Debug, Default, Deserialize, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -11,7 +13,7 @@ pub enum Provider {
     Groq,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(default)]
 pub struct Config {
     pub provider: Provider,
@@ -59,10 +61,39 @@ impl Default for Config {
     }
 }
 
-fn config_path() -> PathBuf {
+#[derive(Debug)]
+pub enum ConfigWriteError {
+    EmptyReplacementKey,
+    InvalidReplacementsTable,
+    ParseToml(toml_edit::TomlError),
+    ReadConfig(std::io::Error),
+    WriteConfig(std::io::Error),
+}
+
+impl fmt::Display for ConfigWriteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyReplacementKey => write!(f, "replacement key cannot be empty"),
+            Self::InvalidReplacementsTable => {
+                write!(f, "`replacements` exists but is not a TOML table")
+            }
+            Self::ParseToml(err) => write!(f, "failed to parse config TOML: {err}"),
+            Self::ReadConfig(err) => write!(f, "failed to read config file: {err}"),
+            Self::WriteConfig(err) => write!(f, "failed to write config file: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for ConfigWriteError {}
+
+fn config_base_dir() -> PathBuf {
     dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("wayvoice.toml")
+        .or_else(|| dirs::home_dir().map(|path| path.join(".config")))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+pub fn config_path() -> PathBuf {
+    config_base_dir().join("wayvoice").join("config.toml")
 }
 
 fn default_keywords() -> Vec<String> {
@@ -147,17 +178,23 @@ fn default_replacements() -> HashMap<String, String> {
     .collect()
 }
 
-pub fn load_config() -> Config {
-    let mut config: Config = config::Config::builder()
+pub fn try_load_config() -> Result<Config, config::ConfigError> {
+    config::Config::builder()
         .add_source(config::File::from(config_path()).required(false))
         .add_source(config::Environment::with_prefix("VOICE"))
         .build()
         .and_then(|c| c.try_deserialize())
-        .unwrap_or_else(|e| {
-            eprintln!("Config error: {e}");
-            Config::default()
-        });
+}
 
+pub fn load_config() -> Config {
+    let config = try_load_config().unwrap_or_else(|e| {
+        eprintln!("Config error: {e}");
+        Config::default()
+    });
+    finalize_config(config)
+}
+
+fn finalize_config(mut config: Config) -> Config {
     if !config.keywords.is_empty() {
         let kw = config.keywords.join(", ");
         if config.prompt.is_empty() {
@@ -177,6 +214,54 @@ pub fn load_config() -> Config {
     config
 }
 
+pub fn upsert_replacement(from: &str, to: &str) -> Result<PathBuf, ConfigWriteError> {
+    let path = config_path();
+    upsert_replacement_at_path(&path, from, to)?;
+    Ok(path)
+}
+
+fn upsert_replacement_at_path(path: &Path, from: &str, to: &str) -> Result<(), ConfigWriteError> {
+    let key = from.trim();
+    if key.is_empty() {
+        return Err(ConfigWriteError::EmptyReplacementKey);
+    }
+
+    let mut doc = load_config_document(path)?;
+    ensure_replacements_table(&mut doc)?.insert(key, value(to));
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(ConfigWriteError::WriteConfig)?;
+    }
+    std::fs::write(path, doc.to_string()).map_err(ConfigWriteError::WriteConfig)?;
+    Ok(())
+}
+
+fn load_config_document(path: &Path) -> Result<DocumentMut, ConfigWriteError> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => {
+            if contents.trim().is_empty() {
+                Ok(DocumentMut::new())
+            } else {
+                contents
+                    .parse::<DocumentMut>()
+                    .map_err(ConfigWriteError::ParseToml)
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(DocumentMut::new()),
+        Err(err) => Err(ConfigWriteError::ReadConfig(err)),
+    }
+}
+
+fn ensure_replacements_table(doc: &mut DocumentMut) -> Result<&mut Table, ConfigWriteError> {
+    if !doc.contains_key("replacements") {
+        doc["replacements"] = Item::Table(Table::new());
+    }
+
+    doc["replacements"]
+        .as_table_mut()
+        .ok_or(ConfigWriteError::InvalidReplacementsTable)
+}
+
 pub fn parse_hex_color(hex: &str) -> Option<(f64, f64, f64)> {
     let hex = hex.strip_prefix('#')?;
     if hex.len() != 6 {
@@ -186,4 +271,77 @@ pub fn parse_hex_color(hex: &str) -> Option<(f64, f64, f64)> {
     let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
     let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
     Some((r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConfigWriteError, config_path, upsert_replacement_at_path};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use toml_edit::DocumentMut;
+
+    fn temp_config_path(test_name: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir()
+            .join(format!(
+                "wayvoice-{test_name}-{}-{unique}",
+                std::process::id()
+            ))
+            .join("wayvoice")
+            .join("config.toml")
+    }
+
+    #[test]
+    fn creates_replacements_table_in_new_config() {
+        let path = temp_config_path("create");
+
+        upsert_replacement_at_path(&path, "hyperland", "Hyprland").unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let doc = contents.parse::<DocumentMut>().unwrap();
+        assert_eq!(doc["replacements"]["hyperland"].as_str(), Some("Hyprland"));
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn preserves_existing_config_when_adding_replacement() {
+        let path = temp_config_path("preserve");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "provider = \"groq\"\n# keep this comment\n\n[replacements]\n\"pmpm\" = \"pnpm\"\n",
+        )
+        .unwrap();
+
+        upsert_replacement_at_path(&path, "ghosty", "Ghostty").unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("provider = \"groq\""));
+        assert!(contents.contains("# keep this comment"));
+        let doc = contents.parse::<DocumentMut>().unwrap();
+        assert_eq!(doc["replacements"]["pmpm"].as_str(), Some("pnpm"));
+        assert_eq!(doc["replacements"]["ghosty"].as_str(), Some("Ghostty"));
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn rejects_non_table_replacements_section() {
+        let path = temp_config_path("reject");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "replacements = \"oops\"\n").unwrap();
+
+        let err = upsert_replacement_at_path(&path, "ghosty", "Ghostty").unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidReplacementsTable));
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn config_path_uses_wayvoice_config_toml() {
+        assert!(config_path().ends_with("wayvoice/config.toml"));
+    }
 }

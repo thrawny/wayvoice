@@ -91,7 +91,7 @@ nix profile install nixpkgs#pipewire nixpkgs#wtype nixpkgs#wl-clipboard nixpkgs#
 Config file path:
 
 ```text
-~/.config/wayvoice.toml
+~/.config/wayvoice/config.toml
 ```
 
 Minimal example:
@@ -122,6 +122,15 @@ If you want to use only your own replacements, set:
 ```toml
 use_default_replacements = false
 ```
+
+You can also add replacements from the CLI:
+
+```bash
+wayvoice replace add "hyperland" "Hyprland"
+wayvoice replace add --substring "mpm" "npm"
+```
+
+When the daemon is running, config updates are reloaded automatically.
 
 ---
 
