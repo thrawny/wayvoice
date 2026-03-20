@@ -85,6 +85,13 @@ async fn main() {
     match cli.command {
         Commands::Serve => {
             let config = load_config();
+            let keywords = config
+                .keywords
+                .iter()
+                .chain(config.extra_keywords.iter())
+                .cloned()
+                .collect::<Vec<_>>();
+            debug!("merged keywords: {:?}", keywords);
             debug!("merged replacements: {:?}", config.replacements);
 
             if config.hud {
