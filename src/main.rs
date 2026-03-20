@@ -13,7 +13,8 @@ use notify::{Event, EventKind, RecursiveMode, Watcher};
 use oneshot::run_once;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 use tokio::sync::{Mutex, mpsc};
 use wayvoice::config::{
     append_keyword, config_path, load_config, try_load_config, upsert_replacement,
@@ -76,6 +77,8 @@ enum ReplaceCommands {
         to: String,
     },
 }
+
+const CONFIG_RELOAD_DEBOUNCE_MS: u64 = 100;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -209,25 +212,27 @@ fn spawn_hud() {
 fn start_config_watcher(daemon: Arc<Mutex<Daemon>>) {
     tokio::spawn(async move {
         let path = config_path();
-        let watch_root = config_watch_root(&path);
+        let watch_state = Arc::new(StdMutex::new(ConfigWatchState::discover(&path)));
+        let initial_state = clone_watch_state(&watch_state);
 
-        if let Err(e) = std::fs::create_dir_all(&watch_root) {
+        if let Err(e) = std::fs::create_dir_all(config_watch_root(&path)) {
             log::warn!(
                 "Failed to create config watch directory {}: {e}",
-                watch_root.display()
+                config_watch_root(&path).display()
             );
             return;
         }
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let watched_path = path.clone();
         let log_path = path.clone();
+        let callback_watch_state = watch_state.clone();
         let mut watcher =
             match notify::recommended_watcher(move |result: notify::Result<Event>| match result {
-                Ok(event) if is_config_reload_event(&event, &watched_path) => {
-                    let _ = tx.send(());
+                Ok(event) => {
+                    if clone_watch_state(&callback_watch_state).matches_event(&event) {
+                        let _ = tx.send(());
+                    }
                 }
-                Ok(_) => {}
                 Err(e) => {
                     log::warn!("Config watcher error for {}: {e}", log_path.display());
                 }
@@ -239,17 +244,15 @@ fn start_config_watcher(daemon: Arc<Mutex<Daemon>>) {
                 }
             };
 
-        if let Err(e) = watcher.watch(&watch_root, RecursiveMode::NonRecursive) {
-            log::warn!(
-                "Failed to watch config directory {}: {e}",
-                watch_root.display()
-            );
+        if !watch_config_roots(&mut watcher, &initial_state.roots) {
             return;
         }
 
         debug!("Watching config changes at {}", path.display());
 
         while rx.recv().await.is_some() {
+            // Coalesce truncate/write bursts so reload sees the settled file contents.
+            tokio::time::sleep(Duration::from_millis(CONFIG_RELOAD_DEBOUNCE_MS)).await;
             while rx.try_recv().is_ok() {}
 
             match try_load_config() {
@@ -270,8 +273,50 @@ fn start_config_watcher(daemon: Arc<Mutex<Daemon>>) {
                     );
                 }
             }
+
+            sync_config_watch_state(&mut watcher, &watch_state);
         }
     });
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConfigWatchState {
+    configured_path: PathBuf,
+    resolved_path: Option<PathBuf>,
+    roots: Vec<PathBuf>,
+}
+
+impl ConfigWatchState {
+    fn discover(path: &Path) -> Self {
+        let configured_path = path.to_path_buf();
+        let resolved_path = resolved_config_path(path);
+        let mut roots = vec![config_watch_root(path).to_path_buf()];
+
+        if let Some(resolved_path) = &resolved_path {
+            push_unique_path(&mut roots, config_watch_root(resolved_path).to_path_buf());
+        }
+
+        Self {
+            configured_path,
+            resolved_path,
+            roots,
+        }
+    }
+
+    fn matches_event(&self, event: &Event) -> bool {
+        matches!(
+            event.kind,
+            EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+        ) && event.paths.iter().any(|path| self.matches_path(path))
+    }
+
+    fn matches_path(&self, path: &Path) -> bool {
+        is_config_path(path, &self.configured_path)
+            || self
+                .resolved_path
+                .as_deref()
+                .is_some_and(|resolved_path| is_config_path(path, resolved_path))
+    }
 }
 
 fn config_watch_root(path: &Path) -> PathBuf {
@@ -280,6 +325,7 @@ fn config_watch_root(path: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+#[cfg(test)]
 fn is_config_reload_event(event: &Event, target: &Path) -> bool {
     matches!(
         event.kind,
@@ -291,12 +337,95 @@ fn is_config_path(path: &Path, target: &Path) -> bool {
     path == target || (path.file_name() == target.file_name() && path.parent() == target.parent())
 }
 
+fn resolved_config_path(path: &Path) -> Option<PathBuf> {
+    std::fs::canonicalize(path)
+        .ok()
+        .filter(|resolved| resolved != path)
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if !paths.iter().any(|path| path == &candidate) {
+        paths.push(candidate);
+    }
+}
+
+fn clone_watch_state(watch_state: &StdMutex<ConfigWatchState>) -> ConfigWatchState {
+    watch_state
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clone()
+}
+
+fn sync_config_watch_state<W: Watcher>(watcher: &mut W, watch_state: &StdMutex<ConfigWatchState>) {
+    let current = clone_watch_state(watch_state);
+    let next = ConfigWatchState::discover(&current.configured_path);
+    if current == next {
+        return;
+    }
+
+    let added_roots = next
+        .roots
+        .iter()
+        .filter(|root| !current.roots.iter().any(|candidate| candidate == *root))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !watch_config_roots(watcher, &added_roots) {
+        return;
+    }
+
+    for root in &current.roots {
+        if next.roots.iter().any(|candidate| candidate == root) {
+            continue;
+        }
+
+        if let Err(e) = watcher.unwatch(root) {
+            log::warn!(
+                "Failed to stop watching config directory {}: {e}",
+                root.display()
+            );
+        }
+    }
+
+    *watch_state
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = next;
+}
+
+fn watch_config_roots<W: Watcher>(watcher: &mut W, roots: &[PathBuf]) -> bool {
+    for root in roots {
+        if let Err(e) = watcher.watch(root, RecursiveMode::NonRecursive) {
+            log::warn!("Failed to watch config directory {}: {e}", root.display());
+            return false;
+        }
+    }
+
+    true
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{config_watch_root, is_config_path, is_config_reload_event};
+    use super::{
+        ConfigWatchState, config_watch_root, is_config_path, is_config_reload_event,
+        resolved_config_path,
+    };
     use notify::event::{CreateKind, ModifyKind, RemoveKind};
     use notify::{Event, EventKind};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_config_path(test_name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir()
+            .join(format!(
+                "wayvoice-main-{test_name}-{}-{unique}",
+                std::process::id()
+            ))
+            .join("wayvoice")
+            .join("config.toml")
+    }
 
     #[test]
     fn matches_config_paths_by_location() {
@@ -338,5 +467,83 @@ mod tests {
     fn watch_root_uses_parent_directory() {
         let root = config_watch_root(Path::new("/tmp/nested/wayvoice/config.toml"));
         assert_eq!(root, Path::new("/tmp/nested/wayvoice"));
+    }
+
+    #[test]
+    fn resolved_config_path_follows_symlinks() {
+        let path = temp_config_path("resolve");
+        let target = path
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("source")
+            .join("config.toml");
+
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "hud = false\n").unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+
+        assert_eq!(resolved_config_path(&path), Some(target.clone()));
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn config_watch_state_includes_symlink_target_root() {
+        let path = temp_config_path("roots");
+        let configured_root = path.parent().unwrap().to_path_buf();
+        let target = path
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("source")
+            .join("config.toml");
+
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "hud = false\n").unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+
+        let state = ConfigWatchState::discover(&path);
+        let target_root = target.parent().unwrap().to_path_buf();
+
+        assert_eq!(state.configured_path, path);
+        assert_eq!(state.resolved_path, Some(target.clone()));
+        assert!(state.roots.contains(&configured_root));
+        assert!(state.roots.contains(&target_root));
+        assert_eq!(state.roots.len(), 2);
+
+        let _ = std::fs::remove_dir_all(state.configured_path.parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn config_watch_state_matches_resolved_target_events() {
+        let path = temp_config_path("match-target");
+        let target = path
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("source")
+            .join("config.toml");
+
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "hud = false\n").unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+
+        let state = ConfigWatchState::discover(&path);
+        let event = Event {
+            kind: EventKind::Modify(ModifyKind::Any),
+            paths: vec![target.clone()],
+            attrs: Default::default(),
+        };
+
+        assert!(state.matches_event(&event));
+
+        let _ = std::fs::remove_dir_all(state.configured_path.parent().unwrap().parent().unwrap());
     }
 }
