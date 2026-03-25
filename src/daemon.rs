@@ -1,6 +1,7 @@
 use crate::debug_recordings::save_wav_data_for_debug;
 use crate::inject::{inject_text, notify};
 use log::{debug, warn};
+use std::io::Write;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,6 +13,7 @@ use wayvoice::audio_guard::{
 };
 use wayvoice::audio_level::display_level;
 use wayvoice::config::Config;
+use wayvoice::post_process::run_post_command;
 use wayvoice::text::apply_replacements;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -128,8 +130,34 @@ impl Daemon {
                     warn!("Discarded suspicious transcript: {text:?} ({reason})");
                     notify(reason, &job.config).await;
                 } else {
-                    let text = apply_replacements(&text, &job.config.replacements);
-                    debug!("replaced: {text}");
+                    let replace_start = std::time::Instant::now();
+                    let replaced = apply_replacements(&text, &job.config.replacements);
+                    let replace_ms = replace_start.elapsed().as_secs_f64() * 1000.0;
+                    debug!("replaced: {replaced}");
+
+                    let post_start = std::time::Instant::now();
+                    let final_text = match run_post_command(&replaced, &job.config).await {
+                        Ok(t) => t,
+                        Err(e) => {
+                            warn!("post_command failed: {e}");
+                            notify(&format!("Post-command error: {e}"), &job.config).await;
+                            replaced.clone()
+                        }
+                    };
+                    let post_ms = post_start.elapsed().as_secs_f64() * 1000.0;
+
+                    let transcribe_ms =
+                        job.total_start.elapsed().as_secs_f64() * 1000.0 - post_ms - replace_ms;
+                    log_transcription_stages(
+                        &text,
+                        &replaced,
+                        &final_text,
+                        &job.config,
+                        transcribe_ms,
+                        replace_ms,
+                        post_ms,
+                    );
+                    let text = final_text;
                     if !text.is_empty() {
                         let inject_start = std::time::Instant::now();
                         inject_text(&text, &job.config).await;
@@ -298,6 +326,53 @@ async fn read_pcm_stream(
     }
 
     level.store(0.0f32.to_bits(), Ordering::Relaxed);
+}
+
+fn log_transcription_stages(
+    raw: &str,
+    replaced: &str,
+    post_processed: &str,
+    config: &Config,
+    transcribe_ms: f64,
+    replace_ms: f64,
+    post_process_ms: f64,
+) {
+    let log_path = wayvoice::config::config_path()
+        .parent()
+        .unwrap()
+        .join("transcription_log.jsonl");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path);
+    match file {
+        Ok(mut f) => {
+            let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+            let model = if config.model.is_empty() {
+                match config.provider {
+                    wayvoice::config::Provider::Openai => "whisper-1",
+                    wayvoice::config::Provider::Groq => "whisper-large-v3-turbo",
+                }
+            } else {
+                &config.model
+            };
+            let entry = serde_json::json!({
+                "ts": ts,
+                "raw": raw,
+                "replaced": replaced,
+                "post_processed": post_processed,
+                "provider": format!("{:?}", config.provider),
+                "transcription_model": model,
+                "post_process": config.post_process,
+                "post_process_model": config.post_process_model,
+                "transcribe_ms": (transcribe_ms * 10.0).round() / 10.0,
+                "replace_ms": (replace_ms * 10.0).round() / 10.0,
+                "post_process_ms": (post_process_ms * 10.0).round() / 10.0,
+            });
+            let _ = writeln!(f, "{entry}");
+        }
+        Err(e) => warn!("failed to write transcription log: {e}"),
+    }
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ use std::process::Stdio;
 use tokio::process::Command;
 use wayvoice::audio_guard::{analyze_audio, reject_before_transcribe, reject_transcript};
 use wayvoice::config::Config;
+use wayvoice::post_process::run_post_command;
 use wayvoice::text::apply_replacements;
 use wayvoice::transcription::transcribe_audio;
 
@@ -97,5 +98,12 @@ pub async fn run_once(config: Config) {
 
     let text = apply_replacements(&text, &config.replacements);
     debug!("replaced: {text}");
+    let text = match run_post_command(&text, &config).await {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("post_command failed: {e}");
+            text
+        }
+    };
     println!("{text}");
 }

@@ -35,6 +35,11 @@ pub struct Config {
     pub notify_send: bool,
     pub debug_recordings: bool,
     pub debug_recordings_dir: Option<String>,
+    pub post_process: bool,
+    pub post_process_model: String,
+    pub post_process_prompt: String,
+    pub post_command: Option<String>,
+    pub post_command_timeout: u64,
 }
 
 impl Default for Config {
@@ -59,6 +64,11 @@ impl Default for Config {
             notify_send: false,
             debug_recordings: true,
             debug_recordings_dir: None,
+            post_process: false,
+            post_process_model: String::new(),
+            post_process_prompt: String::new(),
+            post_command: None,
+            post_command_timeout: 30,
         }
     }
 }
