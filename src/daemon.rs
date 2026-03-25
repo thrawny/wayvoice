@@ -337,10 +337,11 @@ fn log_transcription_stages(
     replace_ms: f64,
     post_process_ms: f64,
 ) {
-    let log_path = wayvoice::config::config_path()
-        .parent()
-        .unwrap()
-        .join("transcription_log.jsonl");
+    let log_dir = dirs::cache_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap().join(".cache"))
+        .join("wayvoice");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join("transcription_log.jsonl");
     let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
