@@ -8,7 +8,7 @@ mod oneshot;
 use clap::{Parser, Subcommand};
 use daemon::Daemon;
 use ipc::{run_server, send_command};
-use log::debug;
+use log::{debug, info};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use oneshot::run_once;
 use std::path::{Path, PathBuf};
@@ -21,7 +21,7 @@ use wayvoice::config::{
 };
 
 #[derive(Parser)]
-#[command(name = "wayvoice", about = "Voice-to-text for Wayland")]
+#[command(name = "wayvoice", about = "Voice-to-text for Wayland", version = env!("WAYVOICE_VERSION"))]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -96,6 +96,18 @@ async fn main() {
                 .collect::<Vec<_>>();
             debug!("merged keywords: {:?}", keywords);
             debug!("merged replacements: {:?}", config.replacements);
+            if config.post_process {
+                info!(
+                    "post_process enabled: model={}",
+                    if config.post_process_model.is_empty() {
+                        "llama-3.3-70b-versatile"
+                    } else {
+                        &config.post_process_model
+                    }
+                );
+            } else {
+                info!("post_process disabled");
+            }
 
             if config.hud {
                 spawn_hud();

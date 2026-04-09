@@ -47,11 +47,11 @@ pub async fn run_post_command(
         .map(String::as_str)
         .collect();
 
-    let user_content = if keywords.is_empty() {
-        format!("{prompt}\n\n{text}")
+    let system_prompt = if keywords.is_empty() {
+        prompt.to_string()
     } else {
         format!(
-            "{prompt}\n\nPreserve these terms exactly as spelled: {}\n\n{text}",
+            "{prompt}\n\nPreserve these terms exactly as spelled: {}",
             keywords.join(", ")
         )
     };
@@ -64,7 +64,10 @@ pub async fn run_post_command(
         .bearer_auth(&api_key)
         .json(&serde_json::json!({
             "model": model,
-            "messages": [{"role": "user", "content": user_content}],
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text},
+            ],
         }))
         .timeout(Duration::from_secs(config.post_command_timeout))
         .send()
