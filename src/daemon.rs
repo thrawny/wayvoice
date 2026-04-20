@@ -353,6 +353,7 @@ fn log_transcription_stages(
                 match config.provider {
                     wayvoice::config::Provider::Openai => "whisper-1",
                     wayvoice::config::Provider::Groq => "whisper-large-v3-turbo",
+                    wayvoice::config::Provider::Codex => "codex",
                 }
             } else {
                 &config.model

@@ -15,11 +15,11 @@ run:
     cargo run -- serve
 
 # Watch daemon with build-gated restart (old process stays alive on compile errors)
-watch provider="groq":
+watch:
     cargo build
     touch {{ _build_stamp }}
-    zmx run wayvoice-build watchexec -w src -w Cargo.toml -e rs --debounce 5s --on-busy-update queue -- 'cargo build && touch {{ _build_stamp }}'
-    zmx run wayvoice env RUST_LOG=debug VOICE_PROVIDER={{ provider }} watchexec --restart --debounce 250ms -w {{ _build_stamp }} -- ./target/debug/wayvoice serve
+    zmx run wayvoice-build -d watchexec -w src -w Cargo.toml -e rs --debounce 5s --on-busy-update queue -- 'cargo build && touch {{ _build_stamp }}'
+    zmx run wayvoice -d env RUST_LOG=debug watchexec --restart --debounce 250ms -w {{ _build_stamp }} -- ./target/debug/wayvoice serve
     zmx attach wayvoice
 
 # Show HUD preview without recording (for UI iteration)

@@ -11,6 +11,7 @@ pub enum Provider {
     Openai,
     #[default]
     Groq,
+    Codex,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -526,5 +527,17 @@ mod tests {
     #[test]
     fn config_path_uses_wayvoice_config_toml() {
         assert!(config_path().ends_with("wayvoice/config.toml"));
+    }
+
+    #[test]
+    fn loads_codex_provider() {
+        let path = temp_config_path("provider-codex");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "provider = \"codex\"\n").unwrap();
+
+        let config = try_load_config_at_path(&path).unwrap();
+        assert_eq!(config.provider, super::Provider::Codex);
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }

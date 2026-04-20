@@ -2,7 +2,7 @@
 
 Voice-to-text for Wayland.
 
-`wayvoice` records audio from PipeWire, sends it to Whisper (Groq or OpenAI), applies optional text replacements, then inserts the result into your current app.
+`wayvoice` records audio from PipeWire, sends it to Whisper (Groq or OpenAI) or Codex transcription, applies optional text replacements, then inserts the result into your current app.
 
 ---
 
@@ -13,9 +13,10 @@ Voice-to-text for Wayland.
 - `wtype`
 - `wl-copy` (for clipboard mode)
 - `notify-send`
-- A Whisper API key:
-  - `GROQ_API_KEY` **or**
-  - `OPENAI_API_KEY`
+- One transcription backend:
+  - `GROQ_API_KEY`, or
+  - `OPENAI_API_KEY`, or
+  - a signed-in Codex CLI with `~/.codex/auth.json`
 
 ---
 
@@ -97,7 +98,7 @@ Config file path:
 Minimal example:
 
 ```toml
-provider = "groq" # or "openai"
+provider = "groq" # or "openai" or "codex"
 language = "en"
 
 # Option A: store key in config
@@ -107,6 +108,9 @@ language = "en"
 # Option B (recommended): use env vars
 # export GROQ_API_KEY=...
 # export OPENAI_API_KEY=...
+
+# Codex provider uses your local Codex login from ~/.codex/auth.json.
+# If the token is stale, wayvoice will try: codex app-server --listen stdio://
 
 # Extra prompt keywords appended after the built-in defaults
 # extra_keywords = ["Zen Browser"]
@@ -119,6 +123,9 @@ language = "en"
 ```
 
 Keywords bias the transcription model upstream via the API prompt. Replacements rewrite the transcript downstream after transcription.
+
+> [!NOTE]
+> The `codex` provider is experimental. It ignores `language`, `prompt`, and `model`, because the current Codex transcription endpoint does not expose the same controls as the OpenAI-compatible APIs.
 
 Replacements are **additive by default**: your `[replacements]` are merged on top of built-in defaults.
 
@@ -206,7 +213,7 @@ Records until Enter, transcribes, and prints text to stdout.
 
 ## Environment variables
 
-- `VOICE_PROVIDER` — override provider (`groq` or `openai`)
+- `VOICE_PROVIDER` — override provider (`groq`, `openai`, or `codex`)
 - `VOICE_HUD` — `0` / `false` / `off` to disable the HUD overlay
 - `VOICE_INJECT_MODE` — `clipboard` (default) or `wtype`
 - `VOICE_WTYPE_DELAY_MS` — delay before paste/type
