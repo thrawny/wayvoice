@@ -154,7 +154,6 @@ impl Daemon {
                         &final_text,
                         &job.config,
                         transcribe_ms,
-                        replace_ms,
                         post_ms,
                     );
                     let text = final_text;
@@ -334,7 +333,6 @@ fn log_transcription_stages(
     post_processed: &str,
     config: &Config,
     transcribe_ms: f64,
-    replace_ms: f64,
     post_process_ms: f64,
 ) {
     let log_dir = dirs::cache_dir()
@@ -358,19 +356,22 @@ fn log_transcription_stages(
             } else {
                 &config.model
             };
-            let entry = serde_json::json!({
+            let mut entry = serde_json::json!({
                 "ts": ts,
                 "raw": raw,
                 "replaced": replaced,
-                "post_processed": post_processed,
                 "provider": format!("{:?}", config.provider),
                 "transcription_model": model,
-                "post_process": config.post_process,
-                "post_process_model": config.post_process_model,
                 "transcribe_ms": (transcribe_ms * 10.0).round() / 10.0,
-                "replace_ms": (replace_ms * 10.0).round() / 10.0,
-                "post_process_ms": (post_process_ms * 10.0).round() / 10.0,
             });
+            if config.post_process {
+                entry["post_processed"] = serde_json::Value::String(post_processed.to_string());
+                entry["post_process"] = serde_json::Value::Bool(true);
+                entry["post_process_model"] =
+                    serde_json::Value::String(config.post_process_model.clone());
+                entry["post_process_ms"] =
+                    serde_json::json!((post_process_ms * 10.0).round() / 10.0);
+            }
             let _ = writeln!(f, "{entry}");
         }
         Err(e) => warn!("failed to write transcription log: {e}"),
