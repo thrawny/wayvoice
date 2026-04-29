@@ -12,7 +12,7 @@ use wayvoice::audio_guard::{
     AudioMetrics, analyze_audio, reject_before_transcribe, reject_transcript, wrap_pcm_as_wav,
 };
 use wayvoice::audio_level::display_level;
-use wayvoice::config::Config;
+use wayvoice::config::{Config, finalize_config};
 use wayvoice::post_process::run_post_command;
 use wayvoice::text::apply_replacements;
 
@@ -42,6 +42,7 @@ pub struct TranscriptionJob {
 
 pub enum ToggleResult {
     Started,
+    Stopped,
     Transcribing(Box<TranscriptionJob>),
     Busy,
 }
@@ -50,6 +51,7 @@ pub struct Daemon {
     state: State,
     config: Config,
     recorder: Option<Child>,
+    active_config: Option<Config>,
     pcm_reader: Option<JoinHandle<()>>,
     pcm_buffer: Arc<Mutex<Vec<u8>>>,
     audio_level: Arc<AtomicU32>,
@@ -61,6 +63,7 @@ impl Daemon {
             state: State::Idle,
             config,
             recorder: None,
+            active_config: None,
             pcm_reader: None,
             pcm_buffer: Arc::new(Mutex::new(Vec::new())),
             audio_level: Arc::new(AtomicU32::new(0.0f32.to_bits())),
@@ -87,14 +90,27 @@ impl Daemon {
     }
 
     pub async fn toggle(&mut self) -> ToggleResult {
+        self.toggle_with_config(self.config.clone()).await
+    }
+
+    pub async fn toggle_with_overrides(
+        &mut self,
+        configure: impl FnOnce(&mut Config),
+    ) -> ToggleResult {
+        let mut config = self.config.clone();
+        configure(&mut config);
+        self.toggle_with_config(finalize_config(config)).await
+    }
+
+    async fn toggle_with_config(&mut self, config: Config) -> ToggleResult {
         match self.state {
             State::Idle => {
-                self.start_recording().await;
+                self.start_recording(config).await;
                 ToggleResult::Started
             }
             State::Recording => match self.prepare_transcription().await {
                 Some(job) => ToggleResult::Transcribing(Box::new(job)),
-                None => ToggleResult::Started,
+                None => ToggleResult::Stopped,
             },
             State::Transcribing => ToggleResult::Busy,
         }
@@ -113,6 +129,7 @@ impl Daemon {
         self.pcm_buffer.lock().unwrap().clear();
         self.audio_level.store(0.0f32.to_bits(), Ordering::Relaxed);
         self.state = State::Idle;
+        self.active_config = None;
         notify("Cancelled", &self.config).await;
         "cancelled"
     }
@@ -121,7 +138,7 @@ impl Daemon {
         &mut self,
         result: Result<String, Box<dyn std::error::Error + Send + Sync>>,
         job: &TranscriptionJob,
-    ) {
+    ) -> Option<String> {
         match result {
             Ok(text) => {
                 debug!("raw: {text}");
@@ -158,6 +175,10 @@ impl Daemon {
                     );
                     let text = final_text;
                     if !text.is_empty() {
+                        if job.config.inject_mode == "stdout" {
+                            self.state = State::Idle;
+                            return Some(text);
+                        }
                         let inject_start = std::time::Instant::now();
                         inject_text(&text, &job.config).await;
                         debug!("inject: {:?}", inject_start.elapsed());
@@ -172,9 +193,10 @@ impl Daemon {
 
         debug!("total: {:?}", job.total_start.elapsed());
         self.state = State::Idle;
+        None
     }
 
-    async fn start_recording(&mut self) {
+    async fn start_recording(&mut self, config: Config) {
         if let Some(reader) = self.pcm_reader.take()
             && let Err(e) = reader.await
         {
@@ -203,17 +225,18 @@ impl Daemon {
             Ok(mut child) => {
                 let stdout = child.stdout.take().expect("stdout piped");
                 self.recorder = Some(child);
+                self.active_config = Some(config.clone());
                 self.state = State::Recording;
 
                 let buffer = self.pcm_buffer.clone();
                 let level = self.audio_level.clone();
                 self.pcm_reader = Some(tokio::spawn(read_pcm_stream(stdout, buffer, level)));
 
-                notify("Recording...", &self.config).await;
+                notify("Recording...", &config).await;
             }
             Err(e) => {
                 eprintln!("Failed to start pw-record: {e}");
-                notify("Failed to start recording", &self.config).await;
+                notify("Failed to start recording", &config).await;
             }
         }
     }
@@ -242,6 +265,7 @@ impl Daemon {
         if pcm_data.is_empty() {
             eprintln!("No audio recorded");
             notify("No audio recorded", &self.config).await;
+            self.active_config = None;
             self.state = State::Idle;
             return None;
         }
@@ -267,19 +291,24 @@ impl Daemon {
             metrics.likely_silent
         );
 
-        if let Some(reason) = reject_before_transcribe(self.config.provider, metrics) {
+        let job_config = self
+            .active_config
+            .take()
+            .unwrap_or_else(|| self.config.clone());
+
+        if let Some(reason) = reject_before_transcribe(job_config.provider, metrics) {
             warn!("{reason}");
-            notify(reason, &self.config).await;
+            notify(reason, &job_config).await;
             self.state = State::Idle;
             return None;
         }
 
         self.state = State::Transcribing;
-        notify("Transcribing...", &self.config).await;
+        notify("Transcribing...", &job_config).await;
 
         Some(TranscriptionJob {
             audio_data,
-            config: self.config.clone(),
+            config: job_config,
             metrics,
             total_start,
         })

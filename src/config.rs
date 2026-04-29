@@ -27,6 +27,7 @@ pub struct Config {
     pub extra_keywords: Vec<String>,
     pub min_words: usize,
     pub use_default_replacements: bool,
+    pub use_default_keywords: bool,
     pub replacements: HashMap<String, String>,
     pub hud_color: Option<String>,
     pub hud: bool,
@@ -56,6 +57,7 @@ impl Default for Config {
             extra_keywords: Vec::new(),
             min_words: 3,
             use_default_replacements: true,
+            use_default_keywords: true,
             replacements: HashMap::new(),
             hud_color: None,
             hud: true,
@@ -217,22 +219,14 @@ pub fn load_config() -> Config {
     })
 }
 
-fn finalize_config(mut config: Config) -> Config {
-    let keywords = config
-        .keywords
-        .iter()
-        .chain(config.extra_keywords.iter())
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-
-    if !keywords.is_empty() {
-        let kw = keywords.join(", ");
-        if config.prompt.is_empty() {
-            config.prompt = kw;
-        } else {
-            config.prompt = format!("{} {kw}", config.prompt);
-        }
+pub fn finalize_config(mut config: Config) -> Config {
+    let mut keywords = Vec::new();
+    if config.use_default_keywords {
+        keywords.extend(config.keywords.iter().map(String::as_str));
     }
+    keywords.extend(config.extra_keywords.iter().map(String::as_str));
+
+    append_prompt_keywords(&mut config.prompt, &keywords);
 
     if config.use_default_replacements {
         let mut replacements = default_replacements();
@@ -240,8 +234,41 @@ fn finalize_config(mut config: Config) -> Config {
         config.replacements = replacements;
     }
 
+    truncate_prompt_for_provider(&mut config.prompt, config.provider);
+
     debug!("provider={:?}", config.provider);
     config
+}
+
+fn append_prompt_keywords(prompt: &mut String, keywords: &[&str]) {
+    if keywords.is_empty() {
+        return;
+    }
+
+    let kw = keywords.join(", ");
+    if prompt.is_empty() {
+        *prompt = kw;
+    } else {
+        *prompt = format!("{prompt} {kw}");
+    }
+}
+
+fn truncate_prompt_for_provider(prompt: &mut String, provider: Provider) {
+    // Groq's Whisper-compatible API currently rejects prompt > 896 chars.
+    // Leave a little margin for any provider-side counting differences.
+    let max_chars = match provider {
+        Provider::Groq => 850,
+        Provider::Openai | Provider::Codex => return,
+    };
+
+    if prompt.len() > max_chars {
+        prompt.truncate(max_chars);
+        while !prompt.is_char_boundary(prompt.len()) {
+            prompt.pop();
+        }
+        *prompt = prompt.trim_end().to_string();
+        debug!("truncated transcription prompt to {max_chars} chars for {provider:?}");
+    }
 }
 
 pub fn upsert_replacement(from: &str, to: &str) -> Result<PathBuf, ConfigWriteError> {
