@@ -479,10 +479,7 @@ mod imp {
     }
 
     fn hud_lock_path() -> PathBuf {
-        std::env::var("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/tmp"))
-            .join("wayvoice-hud.lock")
+        crate::ipc::runtime_dir().join("wayvoice-hud.lock")
     }
 
     fn is_existing_lock_alive(path: &Path) -> bool {

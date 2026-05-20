@@ -2,7 +2,7 @@ use crate::daemon::{Daemon, ToggleResult, TranscriptionJob};
 use log::debug;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -10,11 +10,22 @@ use tokio::sync::Mutex;
 use wayvoice::config::Config;
 use wayvoice::transcription::transcribe_audio;
 
-pub fn socket_path() -> PathBuf {
+pub fn runtime_dir() -> PathBuf {
     std::env::var("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
-        .join("wayvoice.sock")
+        .join("wayvoice")
+}
+
+pub fn socket_path() -> PathBuf {
+    runtime_dir().join("wayvoice.sock")
+}
+
+fn ensure_parent_dir(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -98,6 +109,7 @@ fn summarize_json_payload(json: &str) -> String {
 
 pub async fn run_server(daemon: Arc<Mutex<Daemon>>) -> Result<(), Box<dyn std::error::Error>> {
     let path = socket_path();
+    ensure_parent_dir(&path)?;
     let _ = tokio::fs::remove_file(&path).await;
 
     let listener = UnixListener::bind(&path)?;
@@ -219,9 +231,11 @@ async fn transcribe_for_ipc(daemon: Arc<Mutex<Daemon>>, job: Box<TranscriptionJo
 
     let result = transcribe_audio(job.audio_data.clone(), &job.config).await;
     let mut d = daemon.lock().await;
-    d.finish_transcription(result, &job)
-        .await
-        .unwrap_or_default()
+    match d.finish_transcription(result, &job).await {
+        Ok(Some(text)) => text,
+        Ok(None) => String::new(),
+        Err(error) => serde_json::json!({ "error": error }).to_string(),
+    }
 }
 
 pub async fn send_command(cmd: &str) -> Result<String, Box<dyn std::error::Error>> {
