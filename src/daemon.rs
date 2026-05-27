@@ -138,7 +138,8 @@ impl Daemon {
         &mut self,
         result: Result<String, Box<dyn std::error::Error + Send + Sync>>,
         job: &TranscriptionJob,
-    ) -> Option<String> {
+    ) -> Result<Option<String>, String> {
+        let mut error = None;
         match result {
             Ok(text) => {
                 debug!("raw: {text}");
@@ -146,6 +147,7 @@ impl Daemon {
                 if let Some(reason) = reject_transcript(&job.config, &text, job.metrics) {
                     warn!("Discarded suspicious transcript: {text:?} ({reason})");
                     notify(reason, &job.config).await;
+                    error = Some(reason.to_string());
                 } else {
                     let replace_start = std::time::Instant::now();
                     let replaced = apply_replacements(&text, &job.config.replacements);
@@ -177,7 +179,7 @@ impl Daemon {
                     if !text.is_empty() {
                         if job.config.inject_mode == "stdout" {
                             self.state = State::Idle;
-                            return Some(text);
+                            return Ok(Some(text));
                         }
                         let inject_start = std::time::Instant::now();
                         inject_text(&text, &job.config).await;
@@ -188,12 +190,16 @@ impl Daemon {
             Err(e) => {
                 eprintln!("Transcription failed: {e}");
                 notify(&format!("Error: {e}"), &job.config).await;
+                error = Some(e.to_string());
             }
         }
 
         debug!("total: {:?}", job.total_start.elapsed());
         self.state = State::Idle;
-        None
+        match error {
+            Some(error) => Err(error),
+            None => Ok(None),
+        }
     }
 
     async fn start_recording(&mut self, config: Config) {
@@ -393,6 +399,16 @@ fn log_transcription_stages(
                 "transcription_model": model,
                 "transcribe_ms": (transcribe_ms * 10.0).round() / 10.0,
             });
+            if !config.prompt.is_empty() {
+                entry["prompt"] = serde_json::Value::String(config.prompt.clone());
+                entry["prompt_chars"] = serde_json::json!(config.prompt.chars().count());
+            }
+            if !config.extra_keywords.is_empty() {
+                entry["extra_keywords"] = serde_json::json!(config.extra_keywords);
+            }
+            if !config.use_default_keywords {
+                entry["use_default_keywords"] = serde_json::Value::Bool(false);
+            }
             if config.post_process {
                 entry["post_processed"] = serde_json::Value::String(post_processed.to_string());
                 entry["post_process"] = serde_json::Value::Bool(true);

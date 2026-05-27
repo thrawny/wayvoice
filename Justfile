@@ -30,20 +30,20 @@ hud-preview:
 install:
     cargo install --path . --locked --force
 
-# Run clippy (auto-fix)
-clippy:
-    cargo clippy --fix --allow-dirty --allow-staged --release
-
 # Run all post-change checks
-check: fmt _clippy-strict test
+check: fmt clippy test
 
-# Clippy with denied warnings (for CI/check)
+# Clippy with denied warnings
 _clippy-strict:
     cargo clippy -- -D warnings
 
+# Run clippy and apply machine-applicable fixes
+clippy:
+    cargo clippy --fix --allow-dirty --allow-staged
+
 # Run tests
 test:
-    cargo test --release
+    cargo test
 
 # Run keyword eval tests (requires GROQ_API_KEY)
 eval:

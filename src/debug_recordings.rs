@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use wayvoice::config::Config;
 
-const KEEP_LAST_RECORDINGS: usize = 10;
+const KEEP_LAST_RECORDINGS: usize = 1000;
 
 pub async fn save_wav_data_for_debug(wav_data: &[u8], config: &Config) {
     if !config.debug_recordings || wav_data.is_empty() {
