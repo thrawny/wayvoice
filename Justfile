@@ -49,6 +49,10 @@ test:
 eval:
     cargo test --release -- --ignored --nocapture
 
+# Run prompt variant eval suite for current transcript fixtures (requires GROQ_API_KEY)
+prompt-eval:
+    cargo test --test prompt_eval -- --ignored --nocapture
+
 # Format code
 fmt:
     cargo fmt

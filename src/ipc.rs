@@ -66,7 +66,7 @@ impl RequestOverrides {
             config.prompt = prompt;
         }
         if let Some(extra_keywords) = self.extra_keywords {
-            config.extra_keywords.extend(extra_keywords);
+            config.extra_keywords = extra_keywords;
         }
         if let Some(replacements) = self.replacements {
             config.replacements.extend(replacements);
