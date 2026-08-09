@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -84,6 +85,11 @@ struct PromptVariant {
     prompt: String,
 }
 
+struct ProviderVariant {
+    name: &'static str,
+    config: Config,
+}
+
 fn manifest_dir() -> PathBuf {
     if let Ok(path) = std::env::var("WAYVOICE_PROMPT_EVAL_DIR") {
         return PathBuf::from(path);
@@ -158,6 +164,51 @@ fn groq_config(prompt: &str) -> Config {
     }
 }
 
+fn provider_variants() -> Vec<ProviderVariant> {
+    let keywords = CURRENT_PI_KEYWORDS.join(", ");
+    let elevenlabs_keywords = CURRENT_PI_KEYWORDS
+        .iter()
+        .map(|term| term.to_string())
+        .collect();
+
+    vec![
+        ProviderVariant {
+            name: "groq_no_prompt",
+            config: groq_config(""),
+        },
+        ProviderVariant {
+            name: "groq_keywords",
+            config: groq_config(&keywords),
+        },
+        ProviderVariant {
+            name: "elevenlabs_no_keyterms_no_verbatim",
+            config: Config {
+                provider: Provider::Elevenlabs,
+                language: "en".to_string(),
+                keywords: Vec::new(),
+                extra_keywords: Vec::new(),
+                use_default_keywords: false,
+                ..Config::default()
+            },
+        },
+        ProviderVariant {
+            name: "elevenlabs_keyterms_no_verbatim",
+            config: Config {
+                provider: Provider::Elevenlabs,
+                language: "en".to_string(),
+                keywords: elevenlabs_keywords,
+                extra_keywords: Vec::new(),
+                use_default_keywords: true,
+                ..Config::default()
+            },
+        },
+    ]
+}
+
+fn elevenlabs_api_key_is_set() -> bool {
+    std::env::var("ELEVENLABS_API_KEY").is_ok() || std::env::var("ELEVEN_LABS_API_KEY").is_ok()
+}
+
 fn normalize_for_distance(text: &str) -> Vec<String> {
     text.to_lowercase()
         .chars()
@@ -216,6 +267,43 @@ fn matched_key_terms<'a>(transcript: &str, terms: &'a [String]) -> Vec<&'a str> 
 
 fn report_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/prompt-eval/current.jsonl")
+}
+
+fn provider_report_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/prompt-eval/providers.jsonl")
+}
+
+fn cache_key(case: &EvalCase, variant_name: &str) -> String {
+    format!("{}\0{}\0{}", case.id, case.audio, variant_name)
+}
+
+fn load_cached_transcripts(path: &Path) -> HashMap<String, (String, f64)> {
+    if std::env::var("WAYVOICE_PROMPT_EVAL_REFRESH").as_deref() == Ok("1") {
+        return HashMap::new();
+    }
+
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+
+    contents
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|row| {
+            let case = row.get("case")?.as_str()?;
+            let audio = row.get("audio")?.as_str()?;
+            let variant = row.get("variant")?.as_str()?;
+            let transcript = row.get("transcript")?.as_str()?.to_string();
+            let latency_ms = row
+                .get("latency_ms")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0);
+            Some((
+                format!("{case}\0{audio}\0{variant}"),
+                (transcript, latency_ms),
+            ))
+        })
+        .collect()
 }
 
 fn append_report(path: &Path, value: serde_json::Value) {
@@ -279,6 +367,90 @@ fn prompt_eval_manifest_is_well_formed() {
             audio_path.extension().is_some_and(|ext| ext == "wav"),
             "fixture should be a WAV file: {audio_path:?}"
         );
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn provider_eval_current_transcript_fixtures() {
+    if std::env::var("GROQ_API_KEY").is_err() {
+        eprintln!("skipping: GROQ_API_KEY not set");
+        return;
+    }
+    if !elevenlabs_api_key_is_set() {
+        eprintln!("skipping: ELEVENLABS_API_KEY/ELEVEN_LABS_API_KEY not set");
+        return;
+    }
+
+    let report = provider_report_path();
+    let cached_transcripts = load_cached_transcripts(&report);
+    let _ = std::fs::remove_file(&report);
+    let Some(manifest) = try_load_manifest() else {
+        return;
+    };
+    let variants = provider_variants();
+
+    eprintln!("writing provider eval report to {}", report.display());
+
+    for case in manifest.cases {
+        let audio_path = manifest_dir().join(&case.audio);
+        let audio = std::fs::read(&audio_path).unwrap();
+        let metrics = analyze_audio(&audio);
+
+        for variant in &variants {
+            let cache_key = cache_key(&case, variant.name);
+            let cached = cached_transcripts.get(&cache_key);
+            let (transcript, latency_ms) = if let Some((transcript, latency_ms)) = cached {
+                (transcript.clone(), *latency_ms)
+            } else {
+                let start = Instant::now();
+                let transcript =
+                    transcribe_with_rate_limit_retry(audio.clone(), &variant.config).await;
+                let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+                (transcript, latency_ms)
+            };
+            let pre_guard = reject_before_transcribe(variant.config.provider, metrics);
+            let post_guard = reject_transcript(&variant.config, &transcript, metrics);
+            let wer = word_error_rate(&case.expected, &transcript);
+            let cer = char_error_rate(&case.expected, &transcript);
+            let matched = matched_key_terms(&transcript, &case.key_terms);
+
+            let row = json!({
+                "case": case.id,
+                "audio": case.audio,
+                "variant": variant.name,
+                "provider": format!("{:?}", variant.config.provider),
+                "model": if variant.config.model.is_empty() { serde_json::Value::Null } else { json!(&variant.config.model) },
+                "expected": case.expected,
+                "transcript": transcript,
+                "wer": (wer * 1000.0).round() / 1000.0,
+                "cer": (cer * 1000.0).round() / 1000.0,
+                "key_terms": case.key_terms,
+                "matched_key_terms": matched,
+                "pre_guard": pre_guard,
+                "post_guard": post_guard,
+                "latency_ms": (latency_ms * 10.0).round() / 10.0,
+                "cached": cached.is_some(),
+            });
+            append_report(&report, row);
+
+            eprintln!(
+                "{} / {}{}: WER={:.3} CER={:.3} key_terms={}/{} latency={:.1}ms transcript={:?}",
+                case.id,
+                variant.name,
+                if cached.is_some() { " [cached]" } else { "" },
+                wer,
+                cer,
+                matched.len(),
+                case.key_terms.len(),
+                latency_ms,
+                transcript
+            );
+
+            if cached.is_none() {
+                tokio::time::sleep(REQUEST_DELAY).await;
+            }
+        }
     }
 }
 

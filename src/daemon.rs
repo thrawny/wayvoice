@@ -387,6 +387,7 @@ fn log_transcription_stages(
                     wayvoice::config::Provider::Openai => "whisper-1",
                     wayvoice::config::Provider::Groq => "whisper-large-v3-turbo",
                     wayvoice::config::Provider::Codex => "codex",
+                    wayvoice::config::Provider::Elevenlabs => "scribe_v2",
                 }
             } else {
                 &config.model

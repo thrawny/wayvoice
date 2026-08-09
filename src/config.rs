@@ -12,6 +12,7 @@ pub enum Provider {
     #[default]
     Groq,
     Codex,
+    Elevenlabs,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -20,6 +21,7 @@ pub struct Config {
     pub provider: Provider,
     pub openai_api_key: String,
     pub groq_api_key: String,
+    pub elevenlabs_api_key: String,
     pub prompt: String,
     pub language: String,
     pub model: String,
@@ -50,6 +52,7 @@ impl Default for Config {
             provider: Provider::default(),
             openai_api_key: String::new(),
             groq_api_key: String::new(),
+            elevenlabs_api_key: String::new(),
             prompt: String::new(),
             language: "en".to_string(),
             model: String::new(),
@@ -258,7 +261,7 @@ fn truncate_prompt_for_provider(prompt: &mut String, provider: Provider) {
     // Leave a little margin for any provider-side counting differences.
     let max_chars = match provider {
         Provider::Groq => 850,
-        Provider::Openai | Provider::Codex => return,
+        Provider::Openai | Provider::Codex | Provider::Elevenlabs => return,
     };
 
     if prompt.len() > max_chars {
@@ -564,6 +567,18 @@ mod tests {
 
         let config = try_load_config_at_path(&path).unwrap();
         assert_eq!(config.provider, super::Provider::Codex);
+
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn loads_elevenlabs_provider() {
+        let path = temp_config_path("provider-elevenlabs");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "provider = \"elevenlabs\"\n").unwrap();
+
+        let config = try_load_config_at_path(&path).unwrap();
+        assert_eq!(config.provider, super::Provider::Elevenlabs);
 
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }

@@ -1,4 +1,5 @@
 mod codex;
+mod elevenlabs;
 mod openai_compatible;
 
 use crate::config::{Config, Provider};
@@ -12,5 +13,6 @@ pub async fn transcribe_audio(
             openai_compatible::transcribe_audio(audio_data, config).await
         }
         Provider::Codex => codex::transcribe_audio(audio_data, config).await,
+        Provider::Elevenlabs => elevenlabs::transcribe_audio(audio_data, config).await,
     }
 }

@@ -74,7 +74,9 @@ fn resolve_api_key(config: &Config) -> Result<String, Box<dyn std::error::Error 
             std::env::var("GROQ_API_KEY")
                 .map_err(|_| "GROQ_API_KEY not set and no groq_api_key in voice.toml".into())
         }
-        Provider::Codex => unreachable!("Codex auth is resolved separately"),
+        Provider::Codex | Provider::Elevenlabs => {
+            unreachable!("provider auth is resolved separately")
+        }
     }
 }
 
@@ -82,7 +84,9 @@ fn api_endpoint(provider: Provider) -> &'static str {
     match provider {
         Provider::Openai => "https://api.openai.com/v1/audio/transcriptions",
         Provider::Groq => "https://api.groq.com/openai/v1/audio/transcriptions",
-        Provider::Codex => unreachable!("Codex endpoint is handled in transcription::codex"),
+        Provider::Codex | Provider::Elevenlabs => {
+            unreachable!("provider endpoint is handled separately")
+        }
     }
 }
 
@@ -91,5 +95,6 @@ fn default_model(provider: Provider) -> &'static str {
         Provider::Openai => "whisper-1",
         Provider::Groq => "whisper-large-v3-turbo",
         Provider::Codex => "codex",
+        Provider::Elevenlabs => "scribe_v2",
     }
 }

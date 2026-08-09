@@ -51,7 +51,11 @@ eval:
 
 # Run prompt variant eval suite for current transcript fixtures (requires GROQ_API_KEY)
 prompt-eval:
-    cargo test --test prompt_eval -- --ignored --nocapture
+    cargo test --test prompt_eval prompt_variants_eval_current_transcript_fixtures -- --ignored --nocapture
+
+# Compare Groq vs ElevenLabs on current transcript fixtures
+provider-eval:
+    cargo test --test prompt_eval provider_eval_current_transcript_fixtures -- --ignored --nocapture
 
 # Format code
 fmt:
